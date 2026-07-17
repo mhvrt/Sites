@@ -1,0 +1,93 @@
+name: Scheduled browser monitor
+
+on:
+  schedule:
+    - cron: "13 6 * * *"
+      timezone: "Europe/London"
+    - cron: "47 9 * * *"
+      timezone: "Europe/London"
+    - cron: "22 13 * * *"
+      timezone: "Europe/London"
+    - cron: "38 17 * * *"
+      timezone: "Europe/London"
+    - cron: "11 21 * * *"
+      timezone: "Europe/London"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: browser-site-monitor
+  cancel-in-progress: false
+
+jobs:
+  monitor:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      TARGET_URL: ${{ secrets.TARGET_URL }}
+      SOURCE_URL_1: ${{ secrets.SOURCE_URL_1 }}
+      SOURCE_URL_2: ${{ secrets.SOURCE_URL_2 }}
+      SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
+      PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
+      PRIVATE_REPORTS_REPO: ${{ secrets.PRIVATE_REPORTS_REPO }}
+      PRIVATE_REPORTS_BRANCH: ${{ secrets.PRIVATE_REPORTS_BRANCH }}
+      PRIVATE_REPORT_PATH: ${{ runner.temp }}/private-report.json
+      PUBLIC_SUMMARY_PATH: ${{ runner.temp }}/public-summary.json
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Run browser monitor
+        run: xvfb-run -a node scripts/run-monitor.mjs
+
+      - name: Store detailed report privately
+        if: always()
+        run: node scripts/push-private-report.mjs
+
+      - name: Publish safe run summary
+        if: always()
+        shell: bash
+        run: |
+          node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          const summaryPath = process.env.PUBLIC_SUMMARY_PATH;
+          let summary = null;
+          try { summary = JSON.parse(fs.readFileSync(summaryPath, 'utf8')); } catch {}
+          console.log('## Browser monitor');
+          console.log('');
+          console.log(`- Status: \`${summary?.status || 'unknown'}\``);
+          console.log(`- Profile: \`${summary?.profile || 'unknown'}\``);
+          console.log(`- Browser: \`${summary?.browser || 'unknown'}\``);
+          console.log(`- Device: \`${summary?.deviceCategory || 'unknown'}\``);
+          console.log(`- Pages visited: \`${summary?.pagesVisited ?? 0}\``);
+          console.log(`- Duration: \`${summary?.durationMs ?? 0} ms\``);
+          console.log(`- Error category: \`${summary?.errorCategory || 'none'}\``);
+          NODE
+
+      - name: Validate monitor result
+        if: always()
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          let summary = null;
+          try { summary = JSON.parse(fs.readFileSync(process.env.PUBLIC_SUMMARY_PATH, 'utf8')); } catch {}
+          if (summary?.status !== 'success') process.exit(1);
+          NODE
+
+      - name: Remove temporary reports
+        if: always()
+        run: rm -f "$PRIVATE_REPORT_PATH" "$PUBLIC_SUMMARY_PATH"
