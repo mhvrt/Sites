@@ -1,0 +1,13 @@
+{
+  "name": "browser-site-monitor",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "node --check scripts/run-monitor.mjs && node --check scripts/push-private-report.mjs",
+    "monitor": "node scripts/run-monitor.mjs"
+  },
+  "dependencies": {
+    "playwright": "1.58.2"
+  }
+}
