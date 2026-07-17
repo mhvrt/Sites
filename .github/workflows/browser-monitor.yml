@@ -33,12 +33,16 @@ jobs:
       PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
       PRIVATE_REPORTS_REPO: ${{ secrets.PRIVATE_REPORTS_REPO }}
       PRIVATE_REPORTS_BRANCH: ${{ secrets.PRIVATE_REPORTS_BRANCH }}
-      PRIVATE_REPORT_PATH: ${{ runner.temp }}/private-report.json
-      PUBLIC_SUMMARY_PATH: ${{ runner.temp }}/public-summary.json
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Prepare runtime paths
+        shell: bash
+        run: |
+          echo "PRIVATE_REPORT_PATH=$RUNNER_TEMP/private-report.json" >> "$GITHUB_ENV"
+          echo "PUBLIC_SUMMARY_PATH=$RUNNER_TEMP/public-summary.json" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
