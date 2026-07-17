@@ -1,0 +1,12 @@
+node_modules/
+*.log
+private-report*.json
+public-summary*.json
+.github/results/
+artifacts/
+screenshots/
+traces/
+playwright-report/
+test-results/
+*.har
+*.zip
