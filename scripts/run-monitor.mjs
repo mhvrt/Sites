@@ -126,9 +126,12 @@ async function findTargetLink(page, targetOrigin) {
     if (!(await link.isVisible().catch(() => false))) continue;
     const href = await link.getAttribute("href");
     if (!href) continue;
+
     try {
       const resolved = new URL(href, page.url());
-      if (resolved.origin === targetOrigin) candidates.push({ index, href: resolved.href });
+      if (resolved.origin === targetOrigin) {
+        candidates.push({ index, href: resolved.href });
+      }
     } catch {}
   }
 
@@ -199,6 +202,44 @@ async function collectInternalLinks(page, targetOrigin, visited) {
   return candidates;
 }
 
+async function clickIntoTarget(context, sourcePage, targetLink, targetOrigin) {
+  const link = sourcePage.locator("a[href]").nth(targetLink.index);
+  await link.scrollIntoViewIfNeeded().catch(() => undefined);
+  await link.evaluate((element) => element.removeAttribute("target")).catch(() => undefined);
+
+  const sameTabNavigation = sourcePage
+    .waitForURL(
+      (nextUrl) => {
+        try {
+          return new URL(nextUrl.toString()).origin === targetOrigin;
+        } catch {
+          return false;
+        }
+      },
+      { timeout: 45_000, waitUntil: "domcontentloaded" },
+    )
+    .then(() => ({ page: sourcePage, mode: "same-tab" }))
+    .catch(() => null);
+
+  const popupNavigation = context
+    .waitForEvent("page", { timeout: 45_000 })
+    .then(async (popup) => {
+      await popup.waitForLoadState("domcontentloaded", { timeout: 20_000 }).catch(() => undefined);
+      if (new URL(popup.url()).origin !== targetOrigin) return null;
+      return { page: popup, mode: "popup" };
+    })
+    .catch(() => null);
+
+  await link.click({ timeout: 12_000 });
+  const destination = await Promise.race([sameTabNavigation, popupNavigation]);
+  if (!destination) throw new Error("target_navigation_timeout");
+
+  await destination.page
+    .waitForLoadState("domcontentloaded", { timeout: 15_000 })
+    .catch(() => undefined);
+  return destination;
+}
+
 async function exploreTarget(page, targetOrigin) {
   const desiredPages = randomBetween(2, 4);
   const visited = new Set();
@@ -223,6 +264,7 @@ async function exploreTarget(page, targetOrigin) {
     if (pageNumber >= desiredPages - 1) break;
     const candidates = await collectInternalLinks(page, targetOrigin, visited);
     if (!candidates.length) break;
+
     const selected = pick(candidates);
     const link = page.locator("a[href]").nth(selected.index);
     await link.scrollIntoViewIfNeeded().catch(() => undefined);
@@ -240,7 +282,7 @@ async function exploreTarget(page, targetOrigin) {
               return false;
             }
           },
-          { timeout: 25_000 },
+          { timeout: 25_000, waitUntil: "domcontentloaded" },
         ),
         link.click({ timeout: 10_000 }),
       ]);
@@ -290,11 +332,17 @@ try {
   const targetUrl = requireHttpUrl("TARGET_URL", process.env.TARGET_URL);
   if (!sourceValues.length) throw new Error("missing_source_urls");
   const sourceUrl = requireHttpUrl("SOURCE_URL", pick(sourceValues));
-  const visitorIp = await capturePublicIp();
 
+  privateReport = {
+    ...privateReport,
+    sourceUrl: sourceUrl.href,
+    targetUrl: targetUrl.href,
+  };
+
+  const visitorIp = await capturePublicIp();
   browser = await browserTypeFor(profile.browser).launch({ headless: false });
   const context = await browser.newContext(profile.context);
-  const page = await context.newPage();
+  let page = await context.newPage();
 
   await page.goto(sourceUrl.href, { waitUntil: "domcontentloaded", timeout: 40_000 });
   await page.waitForTimeout(randomBetween(1_500, 3_500));
@@ -303,19 +351,10 @@ try {
   if (!targetLink) throw new Error("target_link_not_found");
 
   const sourcePageTitle = await page.title();
-  await Promise.all([
-    page.waitForURL(
-      (nextUrl) => {
-        try {
-          return new URL(nextUrl.toString()).origin === targetUrl.origin;
-        } catch {
-          return false;
-        }
-      },
-      { timeout: 30_000 },
-    ),
-    page.locator("a[href]").nth(targetLink.index).click({ timeout: 12_000 }),
-  ]);
+  privateReport = { ...privateReport, sourcePageTitle, clickedUrl: targetLink.href };
+
+  const destination = await clickIntoTarget(context, page, targetLink, targetUrl.origin);
+  page = destination.page;
 
   const entryReferrer = await page.evaluate(() => document.referrer);
   const exploration = await exploreTarget(page, targetUrl.origin);
@@ -324,10 +363,7 @@ try {
   privateReport = {
     ...privateReport,
     ok: true,
-    sourceUrl: sourceUrl.href,
-    targetUrl: targetUrl.href,
-    sourcePageTitle,
-    clickedUrl: targetLink.href,
+    navigationMode: destination.mode,
     entryReferrer,
     finalUrl: page.url(),
     finalTitle: await page.title(),
@@ -360,16 +396,17 @@ try {
   publicSummary = {
     ...publicSummary,
     durationMs,
-    errorCategory: errorMessage.startsWith("missing_") || errorMessage.startsWith("invalid_")
-      ? "configuration"
-      : errorMessage === "target_link_not_found"
-        ? "target-link-not-found"
-        : "navigation",
+    errorCategory:
+      errorMessage.startsWith("missing_") || errorMessage.startsWith("invalid_")
+        ? "configuration"
+        : errorMessage === "target_link_not_found"
+          ? "target-link-not-found"
+          : "navigation",
   };
 } finally {
   await browser?.close().catch(() => undefined);
-  await fs.writeFile(PRIVATE_REPORT_PATH, JSON.stringify(privateReport, null, 2) + "\n", {
+  await fs.writeFile(PRIVATE_REPORT_PATH, `${JSON.stringify(privateReport, null, 2)}\n`, {
     mode: 0o600,
   });
-  await fs.writeFile(PUBLIC_SUMMARY_PATH, JSON.stringify(publicSummary, null, 2) + "\n");
+  await fs.writeFile(PUBLIC_SUMMARY_PATH, `${JSON.stringify(publicSummary, null, 2)}\n`);
 }
