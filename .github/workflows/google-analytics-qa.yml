@@ -1,0 +1,104 @@
+name: One-time Google analytics QA
+
+on:
+  workflow_dispatch:
+    inputs:
+      search_query:
+        description: Google search query for this one-time QA run
+        required: true
+        type: string
+      max_pages:
+        description: Maximum Google result pages to inspect
+        required: true
+        default: "5"
+        type: choice
+        options:
+          - "1"
+          - "2"
+          - "3"
+          - "4"
+          - "5"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: google-analytics-qa
+  cancel-in-progress: false
+
+jobs:
+  qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    env:
+      SEARCH_QUERY: ${{ inputs.search_query }}
+      MAX_GOOGLE_PAGES: ${{ inputs.max_pages }}
+      TARGET_URL: ${{ secrets.TARGET_URL }}
+      SECONDARY_ORIGIN: ${{ secrets.SECONDARY_ORIGIN }}
+      SYNTHETIC_QUERY_PARAM: synthetic_monitor
+      PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
+      PRIVATE_REPORTS_REPO: ${{ secrets.PRIVATE_REPORTS_REPO }}
+      PRIVATE_REPORTS_BRANCH: ${{ secrets.PRIVATE_REPORTS_BRANCH }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Prepare runtime paths
+        shell: bash
+        run: |
+          echo "PRIVATE_REPORT_PATH=$RUNNER_TEMP/google-qa-private-report.json" >> "$GITHUB_ENV"
+          echo "PUBLIC_SUMMARY_PATH=$RUNNER_TEMP/google-qa-public-summary.json" >> "$GITHUB_ENV"
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Run one-time Google analytics QA
+        run: xvfb-run -a node scripts/run-google-analytics-qa.mjs
+
+      - name: Store detailed QA report privately
+        if: always()
+        run: node scripts/push-google-qa-report.mjs
+
+      - name: Publish safe QA summary
+        if: always()
+        shell: bash
+        run: |
+          node - <<'NODE' >> "$GITHUB_STEP_SUMMARY"
+          const fs = require('node:fs');
+          let summary = null;
+          try { summary = JSON.parse(fs.readFileSync(process.env.PUBLIC_SUMMARY_PATH, 'utf8')); } catch {}
+          console.log('## Google analytics QA');
+          console.log('');
+          console.log(`- Status: \`${summary?.status || 'unknown'}\``);
+          console.log(`- Google result found: \`${summary?.googleResultFound ? 'yes' : 'no'}\``);
+          console.log(`- Target reached: \`${summary?.targetReached ? 'yes' : 'no'}\``);
+          console.log(`- Destination reached: \`${summary?.destinationReached ? 'yes' : 'no'}\``);
+          console.log(`- Destination pages: \`${summary?.destinationPagesVisited ?? 0}\``);
+          console.log(`- Duration: \`${summary?.durationMs ?? 0} ms\``);
+          console.log(`- Error category: \`${summary?.errorCategory || 'none'}\``);
+          NODE
+
+      - name: Validate QA result
+        if: always()
+        run: |
+          node - <<'NODE'
+          const fs = require('node:fs');
+          let summary = null;
+          try { summary = JSON.parse(fs.readFileSync(process.env.PUBLIC_SUMMARY_PATH, 'utf8')); } catch {}
+          if (summary?.status !== 'success') process.exit(1);
+          NODE
+
+      - name: Remove temporary reports
+        if: always()
+        run: rm -f "$PRIVATE_REPORT_PATH" "$PUBLIC_SUMMARY_PATH"
