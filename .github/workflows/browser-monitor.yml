@@ -1,12 +1,9 @@
 name: Scheduled browser monitor
 
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - ".github/workflows/browser-monitor.yml"
   schedule:
+    - cron: "40 12 * * *"
+      timezone: "Europe/London"
     - cron: "17 0 * * *"
       timezone: "Europe/London"
     - cron: "43 2 * * *"
@@ -61,7 +58,7 @@ jobs:
       SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
       SECONDARY_ORIGIN: ${{ secrets.SECONDARY_ORIGIN }}
       SECONDARY_CONTINUE_PROBABILITY: ${{ vars.SECONDARY_CONTINUE_PROBABILITY || '0.4' }}
-      SECONDARY_MODE: ${{ github.event_name == 'push' && 'force' || github.event_name == 'workflow_dispatch' && inputs.secondary_mode || 'random' }}
+      SECONDARY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.secondary_mode || github.event.schedule == '40 12 * * *' && 'force' || 'random' }}
       BLOCK_ANALYTICS: "true"
       SYNTHETIC_QUERY_PARAM: synthetic_monitor
       PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
