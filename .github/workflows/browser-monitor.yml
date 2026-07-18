@@ -2,29 +2,7 @@ name: Scheduled browser monitor
 
 on:
   schedule:
-    - cron: "17 0 * * *"
-      timezone: "Europe/London"
-    - cron: "43 2 * * *"
-      timezone: "Europe/London"
-    - cron: "8 4 * * *"
-      timezone: "Europe/London"
-    - cron: "51 6 * * *"
-      timezone: "Europe/London"
-    - cron: "29 8 * * *"
-      timezone: "Europe/London"
-    - cron: "56 10 * * *"
-      timezone: "Europe/London"
-    - cron: "14 12 * * *"
-      timezone: "Europe/London"
-    - cron: "47 14 * * *"
-      timezone: "Europe/London"
-    - cron: "22 16 * * *"
-      timezone: "Europe/London"
-    - cron: "39 18 * * *"
-      timezone: "Europe/London"
-    - cron: "7 20 * * *"
-      timezone: "Europe/London"
-    - cron: "53 22 * * *"
+    - cron: "7,22,38,53 * * * *"
       timezone: "Europe/London"
   workflow_dispatch:
     inputs:
