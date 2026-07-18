@@ -1,6 +1,11 @@
 name: Scheduled browser monitor
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/browser-monitor.yml"
   schedule:
     - cron: "17 0 * * *"
       timezone: "Europe/London"
@@ -27,6 +32,16 @@ on:
     - cron: "53 22 * * *"
       timezone: "Europe/London"
   workflow_dispatch:
+    inputs:
+      secondary_mode:
+        description: Continue to the contextual external article
+        required: true
+        default: random
+        type: choice
+        options:
+          - random
+          - force
+          - skip
 
 permissions:
   contents: read
@@ -38,12 +53,17 @@ concurrency:
 jobs:
   monitor:
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     env:
       TARGET_URL: ${{ secrets.TARGET_URL }}
       SOURCE_URL_1: ${{ secrets.SOURCE_URL_1 }}
       SOURCE_URL_2: ${{ secrets.SOURCE_URL_2 }}
       SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
+      SECONDARY_ORIGIN: ${{ secrets.SECONDARY_ORIGIN }}
+      SECONDARY_CONTINUE_PROBABILITY: ${{ vars.SECONDARY_CONTINUE_PROBABILITY || '0.4' }}
+      SECONDARY_MODE: ${{ github.event_name == 'push' && 'force' || github.event_name == 'workflow_dispatch' && inputs.secondary_mode || 'random' }}
+      BLOCK_ANALYTICS: "true"
+      SYNTHETIC_QUERY_PARAM: synthetic_monitor
       PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
       PRIVATE_REPORTS_REPO: ${{ secrets.PRIVATE_REPORTS_REPO }}
       PRIVATE_REPORTS_BRANCH: ${{ secrets.PRIVATE_REPORTS_BRANCH }}
@@ -51,6 +71,8 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          persist-credentials: false
 
       - name: Prepare runtime paths
         shell: bash
@@ -91,7 +113,11 @@ jobs:
           console.log(`- Profile: \`${summary?.profile || 'unknown'}\``);
           console.log(`- Browser: \`${summary?.browser || 'unknown'}\``);
           console.log(`- Device: \`${summary?.deviceCategory || 'unknown'}\``);
-          console.log(`- Pages visited: \`${summary?.pagesVisited ?? 0}\``);
+          console.log(`- Primary pages: \`${summary?.primaryPagesVisited ?? 0}\``);
+          console.log(`- Secondary selected: \`${summary?.secondarySelected ? 'yes' : 'no'}\``);
+          console.log(`- Secondary reached: \`${summary?.secondaryReached ? 'yes' : 'no'}\``);
+          console.log(`- Secondary pages: \`${summary?.secondaryPagesVisited ?? 0}\``);
+          console.log(`- Total pages: \`${summary?.pagesVisited ?? 0}\``);
           console.log(`- Duration: \`${summary?.durationMs ?? 0} ms\``);
           console.log(`- Error category: \`${summary?.errorCategory || 'none'}\``);
           NODE
