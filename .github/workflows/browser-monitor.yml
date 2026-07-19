@@ -53,6 +53,16 @@ jobs:
           echo "PRIVATE_REPORT_PATH=$RUNNER_TEMP/private-report.json" >> "$GITHUB_ENV"
           echo "PUBLIC_SUMMARY_PATH=$RUNNER_TEMP/public-summary.json" >> "$GITHUB_ENV"
 
+      - name: Randomize secondary destination
+        shell: bash
+        run: |
+          if [ $((RANDOM % 2)) -eq 0 ] && [ -n "$SECONDARY_ORIGIN" ]; then
+            echo "SECONDARY_DESTINATION=emcd" >> "$GITHUB_ENV"
+          else
+            echo "SECONDARY_ORIGIN=https://performa.com" >> "$GITHUB_ENV"
+            echo "SECONDARY_DESTINATION=performa" >> "$GITHUB_ENV"
+          fi
+
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -86,6 +96,7 @@ jobs:
           console.log(`- Profile: \`${summary?.profile || 'unknown'}\``);
           console.log(`- Browser: \`${summary?.browser || 'unknown'}\``);
           console.log(`- Device: \`${summary?.deviceCategory || 'unknown'}\``);
+          console.log(`- Secondary destination: \`${process.env.SECONDARY_DESTINATION || 'unknown'}\``);
           console.log(`- Primary pages: \`${summary?.primaryPagesVisited ?? 0}\``);
           console.log(`- Secondary selected: \`${summary?.secondarySelected ? 'yes' : 'no'}\``);
           console.log(`- Secondary reached: \`${summary?.secondaryReached ? 'yes' : 'no'}\``);
