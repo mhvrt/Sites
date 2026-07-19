@@ -36,7 +36,7 @@ jobs:
       SECONDARY_CONTINUE_PROBABILITY: ${{ vars.SECONDARY_CONTINUE_PROBABILITY || '0.4' }}
       SECONDARY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.secondary_mode || 'random' }}
       BLOCK_ANALYTICS: "false"
-      SYNTHETIC_QUERY_PARAM: synthetic_monitor
+      # SYNTHETIC_QUERY_PARAM: synthetic_monitor
       PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
       PRIVATE_REPORTS_REPO: ${{ secrets.PRIVATE_REPORTS_REPO }}
       PRIVATE_REPORTS_BRANCH: ${{ secrets.PRIVATE_REPORTS_BRANCH }}
