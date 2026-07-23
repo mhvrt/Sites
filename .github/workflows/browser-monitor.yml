@@ -32,7 +32,8 @@ jobs:
       SOURCE_URL_1: ${{ secrets.SOURCE_URL_1 }}
       SOURCE_URL_2: ${{ secrets.SOURCE_URL_2 }}
       SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
-      SECONDARY_ORIGIN: ${{ secrets.SECONDARY_ORIGIN }}
+      SECONDARY_ORIGIN: "https://performa.com"
+      SECONDARY_DESTINATION: "performa"
       SECONDARY_CONTINUE_PROBABILITY: ${{ vars.SECONDARY_CONTINUE_PROBABILITY || '0.4' }}
       SECONDARY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.secondary_mode || 'random' }}
       BLOCK_ANALYTICS: "false"
@@ -52,16 +53,6 @@ jobs:
         run: |
           echo "PRIVATE_REPORT_PATH=$RUNNER_TEMP/private-report.json" >> "$GITHUB_ENV"
           echo "PUBLIC_SUMMARY_PATH=$RUNNER_TEMP/public-summary.json" >> "$GITHUB_ENV"
-
-      - name: Randomize secondary destination
-        shell: bash
-        run: |
-          if [ $((RANDOM % 2)) -eq 0 ] && [ -n "$SECONDARY_ORIGIN" ]; then
-            echo "SECONDARY_DESTINATION=emcd" >> "$GITHUB_ENV"
-          else
-            echo "SECONDARY_ORIGIN=https://performa.com" >> "$GITHUB_ENV"
-            echo "SECONDARY_DESTINATION=performa" >> "$GITHUB_ENV"
-          fi
 
       - name: Set up Node.js
         uses: actions/setup-node@v4
