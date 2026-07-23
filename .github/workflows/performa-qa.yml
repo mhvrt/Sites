@@ -24,7 +24,7 @@ jobs:
       SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
       PERFORMA_ORIGIN: "https://performa.com"
       SYNTHETIC_QUERY_PARAM: "synthetic_monitor"
-      BLOCK_ANALYTICS: "true"
+      BLOCK_ANALYTICS: "false"
 
     steps:
       - name: Checkout
