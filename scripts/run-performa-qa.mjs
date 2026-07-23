@@ -58,25 +58,34 @@ async function collectLinks(page) {
   const links = page.locator("a[href]");
   const count = Math.min(await links.count(), 400);
   const out = [];
+
   for (let index = 0; index < count; index += 1) {
     const link = links.nth(index);
     if (!(await link.isVisible().catch(() => false))) continue;
     const href = await link.getAttribute("href");
     if (!href) continue;
+
     try {
       const url = new URL(href, page.url());
       if (!["http:", "https:"].includes(url.protocol)) continue;
-      out.push({ index, href: url.href });
+      const hasImage = await link.locator("img").count().then((value) => value > 0).catch(() => false);
+      out.push({ index, href: url.href, hasImage });
     } catch {}
   }
+
   return out;
 }
 
-async function findLinkToOrigin(page, origin) {
-  const links = await collectLinks(page);
-  return pick(links.filter((link) => {
+async function findLinkToOrigin(page, origin, preferImage = false) {
+  const matches = (await collectLinks(page)).filter((link) => {
     try { return new URL(link.href).origin === origin; } catch { return false; }
-  })) || null;
+  });
+  if (!matches.length) return null;
+  if (preferImage) {
+    const imageLinks = matches.filter((link) => link.hasImage);
+    if (imageLinks.length) return pick(imageLinks);
+  }
+  return pick(matches);
 }
 
 async function clickLink(context, sourcePage, metadata, expectedOrigin) {
@@ -100,17 +109,22 @@ async function clickLink(context, sourcePage, metadata, expectedOrigin) {
   await link.click({ timeout: 12000 });
   const destination = await Promise.race([sameTab, popup]);
   if (!destination) throw new Error("link_navigation_timeout");
+  await destination.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => undefined);
   return destination;
 }
 
-async function readPage(page, deviceCategory, minDwellMs, maxDwellMs) {
+async function readPage(page, deviceCategory, minDwellMs = 6000, maxDwellMs = 15000) {
   const viewport = page.viewportSize() || { width: 1440, height: 900 };
   const documentHeight = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
   const maxScroll = Math.max(0, documentHeight - viewport.height);
   const target = Math.round(maxScroll * (randomBetween(55, 92) / 100));
 
   if (deviceCategory === "desktop") {
-    await page.mouse.move(randomBetween(80, Math.max(81, viewport.width - 80)), randomBetween(80, Math.max(81, viewport.height - 80)), { steps: randomBetween(8, 18) }).catch(() => undefined);
+    await page.mouse.move(
+      randomBetween(80, Math.max(81, viewport.width - 80)),
+      randomBetween(80, Math.max(81, viewport.height - 80)),
+      { steps: randomBetween(8, 18) },
+    ).catch(() => undefined);
   }
 
   let current = await page.evaluate(() => window.scrollY);
@@ -125,8 +139,8 @@ async function readPage(page, deviceCategory, minDwellMs, maxDwellMs) {
   await page.waitForTimeout(randomBetween(minDwellMs, maxDwellMs));
 }
 
-async function browsePerforma(context, page, profile) {
-  const desiredPages = randomBetween(4, 7);
+async function browseSite(context, page, origin, profile, minPages = 4, maxPages = 7) {
+  const desiredPages = randomBetween(minPages, maxPages);
   const visited = new Set();
   let pagesVisited = 0;
 
@@ -136,7 +150,7 @@ async function browsePerforma(context, page, profile) {
       try {
         const url = new URL(link.href);
         url.hash = "";
-        return url.origin === PERFORMA_ORIGIN && !visited.has(normalizeVisitedUrl(url.href)) && !hasBlockedPath(url);
+        return url.origin === origin && !visited.has(normalizeVisitedUrl(url.href)) && !hasBlockedPath(url);
       } catch { return false; }
     });
 
@@ -144,18 +158,24 @@ async function browsePerforma(context, page, profile) {
     pagesVisited += 1;
     if (i === desiredPages - 1 || candidates.length === 0) break;
 
-    page = await clickLink(context, page, pick(candidates), PERFORMA_ORIGIN);
+    page = await clickLink(context, page, pick(candidates), origin);
     await page.waitForTimeout(randomBetween(1200, 2600));
   }
 
   return { page, pagesVisited };
 }
 
-const sourceValues = [process.env.SOURCE_URL_1, process.env.SOURCE_URL_2, process.env.SOURCE_URL_3].filter(Boolean);
-if (sourceValues.length === 0) throw new Error("missing_source_urls");
+const targetValues = [
+  process.env.TARGET_URL,
+  process.env.TARGET_URL_2,
+  process.env.TARGET_URL_3,
+  process.env.TARGET_URL_4,
+  process.env.TARGET_URL_5,
+].filter(Boolean);
 
-const sourceUrl = requireHttpUrl("SOURCE_URL", pick(sourceValues));
-const targetUrl = requireHttpUrl("TARGET_URL", process.env.TARGET_URL);
+if (targetValues.length === 0) throw new Error("missing_target_urls");
+
+const targetUrl = requireHttpUrl("TARGET_URL", pick(targetValues));
 const profile = pick(profiles);
 const startedAt = Date.now();
 let browser;
@@ -166,29 +186,29 @@ try {
   const analyticsBlocked = await installAnalyticsBlock(context);
   let page = await context.newPage();
 
-  await page.goto(sourceUrl.href, { waitUntil: "domcontentloaded", timeout: 40000 });
-  await readPage(page, profile.deviceCategory, 1500, 3500);
+  await page.goto(addSyntheticMarker(targetUrl.href), { waitUntil: "domcontentloaded", timeout: 40000 });
+  const targetResult = await browseSite(context, page, targetUrl.origin, profile, 4, 7);
+  page = targetResult.page;
 
-  const targetLink = await findLinkToOrigin(page, targetUrl.origin);
-  if (!targetLink) throw new Error("target_link_not_found");
-  page = await clickLink(context, page, targetLink, targetUrl.origin);
-  await readPage(page, profile.deviceCategory, 1800, 4500);
-
-  const targetHome = addSyntheticMarker(new URL("/", targetUrl.origin).href);
-  await page.goto(targetHome, { waitUntil: "domcontentloaded", timeout: 40000 });
-  await readPage(page, profile.deviceCategory, 1800, 4500);
-
-  const performaLink = await findLinkToOrigin(page, PERFORMA_ORIGIN);
+  await page.goto(addSyntheticMarker(new URL("/", targetUrl.origin).href), { waitUntil: "domcontentloaded", timeout: 40000 });
+  const performaLink = await findLinkToOrigin(page, PERFORMA_ORIGIN, true);
   if (!performaLink) throw new Error("performa_link_not_found");
+
+  await readPage(page, profile.deviceCategory, 4000, 9000);
   page = await clickLink(context, page, performaLink, PERFORMA_ORIGIN);
 
-  const result = await browsePerforma(context, page, profile);
+  const performaResult = await browseSite(context, page, PERFORMA_ORIGIN, profile, 4, 7);
+  page = performaResult.page;
+
   console.log(JSON.stringify({
     status: "success",
     synthetic: true,
     analyticsBlocked,
     profile: profile.id,
-    performaPagesVisited: result.pagesVisited,
+    feederSite: targetUrl.origin,
+    feederPagesVisited: targetResult.pagesVisited,
+    performaPagesVisited: performaResult.pagesVisited,
+    finalUrl: page.url(),
     durationMs: Date.now() - startedAt,
   }));
 } finally {
