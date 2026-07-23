@@ -19,9 +19,10 @@ jobs:
     timeout-minutes: 30
     env:
       TARGET_URL: ${{ secrets.TARGET_URL }}
-      SOURCE_URL_1: ${{ secrets.SOURCE_URL_1 }}
-      SOURCE_URL_2: ${{ secrets.SOURCE_URL_2 }}
-      SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
+      TARGET_URL_2: "https://bitcash.dev/"
+      TARGET_URL_3: "https://bitdova.com/"
+      TARGET_URL_4: "https://docstr.app/"
+      TARGET_URL_5: "https://nftworldnews.tech/"
       PERFORMA_ORIGIN: "https://performa.com"
       # SYNTHETIC_QUERY_PARAM: "synthetic_monitor"
       # BLOCK_ANALYTICS: "false"
