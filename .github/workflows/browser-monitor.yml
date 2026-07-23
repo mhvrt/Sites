@@ -9,7 +9,7 @@ on:
       secondary_mode:
         description: Continue to the contextual external article
         required: true
-        default: random
+        default: force
         type: choice
         options:
           - random
@@ -35,7 +35,7 @@ jobs:
       SECONDARY_ORIGIN: "https://performa.com"
       SECONDARY_DESTINATION: "performa"
       SECONDARY_CONTINUE_PROBABILITY: ${{ vars.SECONDARY_CONTINUE_PROBABILITY || '0.4' }}
-      SECONDARY_MODE: ${{ github.event_name == 'workflow_dispatch' && inputs.secondary_mode || 'random' }}
+      SECONDARY_MODE: "force"
       BLOCK_ANALYTICS: "false"
       # SYNTHETIC_QUERY_PARAM: synthetic_monitor
       PRIVATE_REPORTS_TOKEN: ${{ secrets.PRIVATE_REPORTS_TOKEN }}
