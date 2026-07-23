@@ -172,7 +172,7 @@ let publicSummary={status:"failed",profile:profile.id,browser:profile.browser,de
 try {
   const targetUrl=requireHttpUrl("TARGET_URL",process.env.TARGET_URL); const configuredSecondaryUrl=optionalHttpUrl("SECONDARY_ORIGIN",process.env.SECONDARY_ORIGIN); if(!sourceValues.length) throw new Error("missing_source_urls"); const sourceUrl=requireHttpUrl("SOURCE_URL",pick(sourceValues));
   privateReport={...privateReport,sourceUrl:sourceUrl.href,targetUrl:targetUrl.href,configuredSecondaryOrigin:configuredSecondaryUrl?.origin||null};
-  const visitorIp=await capturePublicIp(); browser=await browserTypeFor(profile.browser).launch({headless:false}); const context=await browser.newContext(profile.context); const analyticsBlocked=await installAnalyticsBlock(context); await context.setExtraHTTPHeaders({"X-Synthetic-Monitor":"1"}); let page=await context.newPage();
+  const visitorIp=await capturePublicIp(); browser=await browserTypeFor(profile.browser).launch({headless:false}); const context=await browser.newContext(profile.context); const analyticsBlocked=await installAnalyticsBlock(context); let page=await context.newPage();
   await page.goto(sourceUrl.href,{waitUntil:"domcontentloaded",timeout:40000}); await page.waitForTimeout(randomBetween(900,2200));
   const targetLink=await findLinkToOrigin(page,targetUrl.origin); if(!targetLink) throw new Error("target_link_not_found");
   const sourcePageTitle=await page.title(); const sourceReading=await readPage(page,profile.deviceCategory,targetLink); const primaryDestination=await clickLink(context,page,targetLink,targetUrl.origin); page=primaryDestination.page;
