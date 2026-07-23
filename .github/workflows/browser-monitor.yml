@@ -54,25 +54,6 @@ jobs:
           echo "PRIVATE_REPORT_PATH=$RUNNER_TEMP/private-report.json" >> "$GITHUB_ENV"
           echo "PUBLIC_SUMMARY_PATH=$RUNNER_TEMP/public-summary.json" >> "$GITHUB_ENV"
 
-      - name: Choose feeder site
-        shell: bash
-        run: |
-          sites=(
-            "https://bitcash.dev/"
-            "https://bitdova.com/"
-            "https://docstr.app/"
-            "https://nftworldnews.tech/"
-          )
-          if [ -n "$TARGET_URL" ]; then
-            sites+=("$TARGET_URL")
-          fi
-          selected="${sites[$((RANDOM % ${#sites[@]}))]}"
-          echo "TARGET_URL=$selected" >> "$GITHUB_ENV"
-          echo "SOURCE_URL_1=$selected" >> "$GITHUB_ENV"
-          echo "SOURCE_URL_2=$selected" >> "$GITHUB_ENV"
-          echo "SOURCE_URL_3=$selected" >> "$GITHUB_ENV"
-          echo "FEEDER_SITE=$selected" >> "$GITHUB_ENV"
-
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:
@@ -103,7 +84,6 @@ jobs:
           console.log('## Browser monitor');
           console.log('');
           console.log(`- Status: \`${summary?.status || 'unknown'}\``);
-          console.log(`- Feeder site: \`${process.env.FEEDER_SITE || process.env.TARGET_URL || 'unknown'}\``);
           console.log(`- Profile: \`${summary?.profile || 'unknown'}\``);
           console.log(`- Browser: \`${summary?.browser || 'unknown'}\``);
           console.log(`- Device: \`${summary?.deviceCategory || 'unknown'}\``);
