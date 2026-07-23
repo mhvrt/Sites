@@ -2,7 +2,7 @@ name: Extended Performa synthetic QA
 
 on:
   schedule:
-    - cron: "14 * * * *"
+    - cron: "7,23,41,58 * * * *"
       timezone: "Europe/London"
   workflow_dispatch:
 
