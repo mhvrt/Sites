@@ -18,11 +18,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      TARGET_URL: ${{ secrets.TARGET_URL }}
-      TARGET_URL_2: "https://bitcash.dev/"
-      TARGET_URL_3: "https://bitdova.com/"
-      TARGET_URL_4: "https://docstr.app/"
-      TARGET_URL_5: "https://nftworldnews.tech/"
+      FEEDER_URL_1: "https://bitcash.dev/"
+      FEEDER_URL_2: "https://bitdova.com/"
+      FEEDER_URL_3: "https://docstr.app/"
+      FEEDER_URL_4: "https://nftworldnews.tech/"
       PERFORMA_ORIGIN: "https://performa.com"
       # SYNTHETIC_QUERY_PARAM: "synthetic_monitor"
       # BLOCK_ANALYTICS: "false"
