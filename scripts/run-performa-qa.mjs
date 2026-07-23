@@ -165,17 +165,16 @@ async function browseSite(context, page, origin, profile, minPages = 4, maxPages
   return { page, pagesVisited };
 }
 
-const targetValues = [
-  process.env.TARGET_URL,
-  process.env.TARGET_URL_2,
-  process.env.TARGET_URL_3,
-  process.env.TARGET_URL_4,
-  process.env.TARGET_URL_5,
+const feederValues = [
+  process.env.FEEDER_URL_1,
+  process.env.FEEDER_URL_2,
+  process.env.FEEDER_URL_3,
+  process.env.FEEDER_URL_4,
 ].filter(Boolean);
 
-if (targetValues.length === 0) throw new Error("missing_target_urls");
+if (feederValues.length === 0) throw new Error("missing_feeder_urls");
 
-const targetUrl = requireHttpUrl("TARGET_URL", pick(targetValues));
+const targetUrl = requireHttpUrl("FEEDER_URL", pick(feederValues));
 const profile = pick(profiles);
 const startedAt = Date.now();
 let browser;
