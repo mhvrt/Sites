@@ -1,0 +1,50 @@
+name: Extended Performa synthetic QA
+
+on:
+  schedule:
+    - cron: "14 * * * *"
+      timezone: "Europe/London"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: performa-synthetic-qa
+  cancel-in-progress: false
+
+jobs:
+  performa-qa:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      TARGET_URL: ${{ secrets.TARGET_URL }}
+      SOURCE_URL_1: ${{ secrets.SOURCE_URL_1 }}
+      SOURCE_URL_2: ${{ secrets.SOURCE_URL_2 }}
+      SOURCE_URL_3: ${{ secrets.SOURCE_URL_3 }}
+      PERFORMA_ORIGIN: "https://performa.com"
+      SYNTHETIC_QUERY_PARAM: "synthetic_monitor"
+      BLOCK_ANALYTICS: "true"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install Playwright browsers
+        run: npx playwright install --with-deps chromium firefox webkit
+
+      - name: Validate Performa QA script
+        run: node --check scripts/run-performa-qa.mjs
+
+      - name: Run extended Performa QA journey
+        run: xvfb-run -a node scripts/run-performa-qa.mjs
