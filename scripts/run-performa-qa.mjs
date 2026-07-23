@@ -164,7 +164,6 @@ try {
   browser = await browserTypeFor(profile.browser).launch({ headless: false });
   const context = await browser.newContext(profile.context);
   const analyticsBlocked = await installAnalyticsBlock(context);
-  await context.setExtraHTTPHeaders({ "X-Synthetic-Monitor": "1" });
   let page = await context.newPage();
 
   await page.goto(sourceUrl.href, { waitUntil: "domcontentloaded", timeout: 40000 });
