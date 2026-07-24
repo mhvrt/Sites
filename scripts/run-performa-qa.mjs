@@ -7,6 +7,14 @@ const SYNTHETIC_HEADER = {
   "X-Synthetic-Monitor": "1",
 };
 
+const CLOUDFLARE_ACCOUNT_ID = String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim();
+const CLOUDFLARE_AI_TOKEN = String(process.env.CLOUDFLARE_AI_TOKEN || "").trim();
+const CLOUDFLARE_AI_MODEL = String(process.env.CLOUDFLARE_AI_MODEL || "@cf/ibm-granite/granite-4.0-h-micro").trim();
+const AI_ENABLED = Boolean(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_AI_TOKEN);
+const AI_MAX_DECISIONS = Math.max(0, Number.parseInt(process.env.AI_MAX_DECISIONS || "10", 10) || 0);
+const AI_DECISION_PROBABILITY = Math.min(1, Math.max(0, Number.parseFloat(process.env.AI_DECISION_PROBABILITY || "0.85") || 0));
+const AI_REQUEST_TIMEOUT_MS = 9000;
+
 const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
 const pick = (values) => values[randomBetween(0, values.length - 1)];
 const chance = (probability) => Math.random() < probability;
@@ -27,6 +35,47 @@ function normalizeVisitedUrl(value) {
 
 function hasBlockedPath(url) {
   return BLOCKED_PATH_PARTS.some((part) => url.pathname.toLowerCase().includes(part));
+}
+
+function cleanText(value, maxLength = 120) {
+  return String(value || "").replace(/\s+/g, " ").trim().slice(0, maxLength);
+}
+
+function shuffled(values) {
+  const copy = [...values];
+  for (let i = copy.length - 1; i > 0; i -= 1) {
+    const j = randomBetween(0, i);
+    [copy[i], copy[j]] = [copy[j], copy[i]];
+  }
+  return copy;
+}
+
+function compactVisited(values, limit = 10) {
+  return [...values].slice(-limit).map((value) => {
+    try {
+      const url = new URL(value);
+      return `${url.pathname}${url.search}`.slice(0, 140);
+    } catch {
+      return String(value).slice(0, 140);
+    }
+  });
+}
+
+function parseAiDecision(raw) {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) return raw;
+  const text = String(raw || "").trim();
+  try {
+    return JSON.parse(text);
+  } catch {}
+
+  const firstBrace = text.indexOf("{");
+  const lastBrace = text.lastIndexOf("}");
+  if (firstBrace >= 0 && lastBrace > firstBrace) {
+    try {
+      return JSON.parse(text.slice(firstBrace, lastBrace + 1));
+    } catch {}
+  }
+  return null;
 }
 
 const profiles = [
@@ -83,7 +132,13 @@ async function collectLinks(page) {
       const url = new URL(href, page.url());
       if (!["http:", "https:"].includes(url.protocol)) continue;
       const hasImage = await link.locator("img").count().then((value) => value > 0).catch(() => false);
-      out.push({ index, href: url.href, hasImage });
+      const text = cleanText(
+        await link.innerText().catch(() => "") ||
+        await link.getAttribute("aria-label").catch(() => "") ||
+        await link.getAttribute("title").catch(() => "") ||
+        url.pathname,
+      );
+      out.push({ index, href: url.href, hasImage, text });
     } catch {}
   }
 
@@ -100,6 +155,93 @@ async function findLinkToOrigin(page, origin, preferImage = false) {
     if (imageLinks.length) return pick(imageLinks);
   }
   return pick(matches);
+}
+
+async function callCloudflareAi(messages) {
+  const endpoint = `https://api.cloudflare.com/client/v4/accounts/${CLOUDFLARE_ACCOUNT_ID}/ai/run/${CLOUDFLARE_AI_MODEL}`;
+  const response = await fetch(endpoint, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${CLOUDFLARE_AI_TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messages,
+      max_tokens: 60,
+      temperature: 0.9,
+      top_p: 0.9,
+      seed: randomBetween(1, 9_000_000_000),
+      presence_penalty: 0.35,
+      repetition_penalty: 1.05,
+    }),
+    signal: AbortSignal.timeout(AI_REQUEST_TIMEOUT_MS),
+  });
+
+  if (!response.ok) throw new Error(`cloudflare_ai_http_${response.status}`);
+  const payload = await response.json();
+  if (!payload?.success) throw new Error("cloudflare_ai_unsuccessful");
+  return payload?.result?.response;
+}
+
+async function chooseCandidateWithAi({ page, candidates, visited, siteRole, step, desiredPages, aiState }) {
+  if (!candidates.length) return null;
+
+  const canAskAi = AI_ENABLED && aiState.calls < AI_MAX_DECISIONS && chance(AI_DECISION_PROBABILITY);
+  if (!canAskAi) {
+    aiState.randomDecisions += 1;
+    return pick(candidates);
+  }
+
+  const shortlist = shuffled(candidates).slice(0, Math.min(24, candidates.length));
+  const currentTitle = cleanText(await page.title().catch(() => ""), 100);
+  const options = shortlist.map((candidate, candidateId) => {
+    const url = new URL(candidate.href);
+    return {
+      candidateId,
+      text: cleanText(candidate.text || url.pathname, 90),
+      path: `${url.pathname}${url.search}`.slice(0, 120),
+      imageLink: candidate.hasImage,
+    };
+  });
+
+  const systemPrompt = [
+    "You are an autonomous website QA exploration planner.",
+    "Choose exactly one supplied visible internal link that gives useful, varied coverage of the current site.",
+    "Prefer meaningful content, product, feature, documentation, blog, news, about, FAQ, and informational pages.",
+    "Avoid repetitive paths and avoid login, account, checkout, cart, admin, legal/privacy/terms, or actions that submit forms or change data.",
+    "Never invent a URL and never choose anything outside the supplied candidates.",
+    "Return JSON only in this exact shape: {\"candidateId\": number}.",
+  ].join(" ");
+
+  const userPrompt = JSON.stringify({
+    siteRole,
+    currentUrl: page.url(),
+    currentTitle,
+    step: step + 1,
+    plannedPages: desiredPages,
+    recentlyVisited: compactVisited(visited),
+    candidates: options,
+  });
+
+  aiState.calls += 1;
+  try {
+    const raw = await callCloudflareAi([
+      { role: "system", content: systemPrompt },
+      { role: "user", content: userPrompt },
+    ]);
+    const decision = parseAiDecision(raw);
+    const candidateId = Number(decision?.candidateId);
+    if (!Number.isInteger(candidateId) || candidateId < 0 || candidateId >= shortlist.length) {
+      throw new Error("cloudflare_ai_invalid_candidate");
+    }
+    aiState.aiDecisions += 1;
+    return shortlist[candidateId];
+  } catch (error) {
+    aiState.fallbacks += 1;
+    aiState.randomDecisions += 1;
+    console.warn(`AI navigation fallback: ${error?.message || "unknown_error"}`);
+    return pick(candidates);
+  }
 }
 
 async function clickLink(context, sourcePage, metadata, expectedOrigin) {
@@ -160,7 +302,7 @@ async function readPage(page, deviceCategory, minDwellMs = 7000, maxDwellMs = 18
   await page.waitForTimeout(randomBetween(minDwellMs, maxDwellMs));
 }
 
-async function browseSite(context, page, origin, profile, options = {}) {
+async function browseSite(context, page, origin, profile, options = {}, aiState, siteRole = "site") {
   const {
     minPages = 6,
     maxPages = 10,
@@ -200,7 +342,18 @@ async function browseSite(context, page, origin, profile, options = {}) {
 
     if (candidates.length === 0) break;
 
-    page = await clickLink(context, page, pick(candidates), origin);
+    const nextCandidate = await chooseCandidateWithAi({
+      page,
+      candidates,
+      visited,
+      siteRole,
+      step: i,
+      desiredPages,
+      aiState,
+    });
+    if (!nextCandidate) break;
+
+    page = await clickLink(context, page, nextCandidate, origin);
     await page.waitForTimeout(randomBetween(900, 3400));
   }
 
@@ -219,6 +372,12 @@ if (feederValues.length === 0) throw new Error("missing_feeder_urls");
 const targetUrl = requireHttpUrl("FEEDER_URL", pick(feederValues));
 const profile = pick(profiles);
 const startedAt = Date.now();
+const aiState = {
+  calls: 0,
+  aiDecisions: 0,
+  randomDecisions: 0,
+  fallbacks: 0,
+};
 let browser;
 
 try {
@@ -244,7 +403,7 @@ try {
   };
 
   await page.goto(targetUrl.href, { waitUntil: "domcontentloaded", timeout: 40000 });
-  const targetResult = await browseSite(context, page, targetUrl.origin, profile, feederPlan);
+  const targetResult = await browseSite(context, page, targetUrl.origin, profile, feederPlan, aiState, "feeder");
   page = targetResult.page;
 
   await page.goto(new URL("/", targetUrl.origin).href, { waitUntil: "domcontentloaded", timeout: 40000 });
@@ -257,13 +416,19 @@ try {
   page = await clickLink(context, page, performaLink, PERFORMA_ORIGIN);
   await page.waitForTimeout(randomBetween(1200, 4000));
 
-  const performaResult = await browseSite(context, page, PERFORMA_ORIGIN, profile, performaPlan);
+  const performaResult = await browseSite(context, page, PERFORMA_ORIGIN, profile, performaPlan, aiState, "performa");
   page = performaResult.page;
 
   console.log(JSON.stringify({
     status: "success",
     synthetic: true,
     analyticsBlocked,
+    aiEnabled: AI_ENABLED,
+    aiModel: AI_ENABLED ? CLOUDFLARE_AI_MODEL : null,
+    aiCalls: aiState.calls,
+    aiDecisions: aiState.aiDecisions,
+    randomDecisions: aiState.randomDecisions,
+    aiFallbacks: aiState.fallbacks,
     profile: profile.id,
     feederSite: targetUrl.origin,
     feederPagesVisited: targetResult.pagesVisited,
