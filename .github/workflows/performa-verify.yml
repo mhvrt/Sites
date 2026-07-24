@@ -40,21 +40,27 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox webkit
-      - name: Syntax check
-        run: node --check scripts/run-performa-qa.mjs
-      - name: Run full QA and report
+      - name: Check and run full QA, always report
         shell: bash
         run: |
           set +e
-          xvfb-run -a node scripts/run-performa-qa.mjs > verify.log 2>&1
-          status=$?
+          : > verify.log
+          node --check scripts/run-performa-qa.mjs >> verify.log 2>&1
+          syntax_status=$?
+          if [ "$syntax_status" -eq 0 ]; then
+            xvfb-run -a node scripts/run-performa-qa.mjs >> verify.log 2>&1
+            status=$?
+          else
+            status=$syntax_status
+          fi
           {
             echo "### VERIFY ${{ matrix.name }}"
             echo
             echo '```text'
-            tail -n 100 verify.log
+            tail -n 120 verify.log
             echo '```'
             echo
+            echo "syntax_exit_code=$syntax_status"
             echo "exit_code=$status"
           } > comment.md
           gh issue comment 5 --repo "${{ github.repository }}" --body-file comment.md
