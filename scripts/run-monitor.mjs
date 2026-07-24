@@ -101,7 +101,7 @@ async function collectLinks(page) {
 }
 function chooseBest(candidates) { if (!candidates.length) return null; const sorted=[...candidates].sort((a,b)=>b.score-a.score); const top=sorted[0].score; return pick(sorted.filter((x)=>x.score>=top-8)); }
 async function findLinkToOrigin(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{return new URL(c.href).origin===origin;}catch{return false;}})); }
-async function findHomeLink(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);return u.origin===origin && u.pathname.replace(/\/+$/,")")===")";}catch{return false;}})); }
+async function findHomeLink(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);return u.origin===origin && u.pathname.replace(/\/+$/,"")==="";}catch{return false;}})); }
 async function findSecondaryLink(page, primaryOrigin, configuredOrigin) {
   const links = await collectLinks(page);
   if (configuredOrigin) return chooseBest(links.filter((c)=>{try{return new URL(c.href).origin===configuredOrigin;}catch{return false;}}));
