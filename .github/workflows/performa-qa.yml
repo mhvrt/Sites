@@ -23,6 +23,8 @@ jobs:
             feeder: "https://docstr.app/"
           - id: nftworldnews
             feeder: "https://nftworldnews.tech/"
+          - id: subsocket
+            feeder: "https://subsocket.io/"
     concurrency:
       group: performa-synthetic-qa-${{ matrix.id }}
       cancel-in-progress: false
