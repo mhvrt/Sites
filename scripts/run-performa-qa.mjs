@@ -34,16 +34,34 @@ const profiles = [
 
 const browserTypeFor = (name) => name === "firefox" ? firefox : name === "webkit" ? webkit : chromium;
 
-async function installAnalyticsBlock(context) {
-  if (String(process.env.BLOCK_ANALYTICS || "false").toLowerCase() !== "true") return false;
+async function installRequestRouting(context, allowedOrigins) {
+  const allowed = new Set(allowedOrigins.filter(Boolean));
+  const analyticsBlocked = String(process.env.BLOCK_ANALYTICS || "false").toLowerCase() === "true";
+
   await context.route("**/*", async (route) => {
+    const request = route.request();
     try {
-      const host = new URL(route.request().url()).hostname.toLowerCase();
-      if (ANALYTICS_HOST_SUFFIXES.some((suffix) => hostMatchesSuffix(host, suffix))) return route.abort("blockedbyclient");
+      const url = new URL(request.url());
+      const host = url.hostname.toLowerCase();
+
+      if (analyticsBlocked && ANALYTICS_HOST_SUFFIXES.some((suffix) => hostMatchesSuffix(host, suffix))) {
+        return route.abort("blockedbyclient");
+      }
+
+      if (allowed.has(url.origin)) {
+        return route.continue({
+          headers: {
+            ...request.headers(),
+            "X-Synthetic-Monitor": "1",
+          },
+        });
+      }
     } catch {}
+
     await route.continue();
   });
-  return true;
+
+  return analyticsBlocked;
 }
 
 async function collectLinks(page) {
@@ -174,8 +192,7 @@ let browser;
 try {
   browser = await browserTypeFor(profile.browser).launch({ headless: false });
   const context = await browser.newContext(profile.context);
-  await context.setExtraHTTPHeaders({ "X-Synthetic-Monitor": "1" });
-  const analyticsBlocked = await installAnalyticsBlock(context);
+  const analyticsBlocked = await installRequestRouting(context, [targetUrl.origin, PERFORMA_ORIGIN]);
   let page = await context.newPage();
 
   await page.goto(targetUrl.href, { waitUntil: "domcontentloaded", timeout: 40000 });
