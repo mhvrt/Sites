@@ -1,0 +1,56 @@
+name: One-off Performa diagnostic
+
+on:
+  push:
+    paths:
+      - '.github/workflows/performa-diagnostic.yml'
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  diagnose:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: bitcash
+            url: https://bitcash.dev/
+          - name: bitdova
+            url: https://bitdova.com/
+          - name: docstr
+            url: https://docstr.app/
+          - name: nftworldnews
+            url: https://nftworldnews.tech/
+          - name: subsocket
+            url: https://subsocket.io/
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      FEEDER_URL: ${{ matrix.url }}
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Run diagnostic
+        shell: bash
+        run: |
+          set +e
+          xvfb-run -a node scripts/diagnose-performa.mjs > diagnostic.json 2>&1
+          status=$?
+          {
+            echo "### ${{ matrix.name }}"
+            echo
+            echo '\`\`\`json'
+            cat diagnostic.json
+            echo '\`\`\`'
+            echo
+            echo "exit_code=$status"
+          } > comment.md
+          gh issue comment 2 --repo "${{ github.repository }}" --body-file comment.md
+          exit 0
