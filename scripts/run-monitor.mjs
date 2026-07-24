@@ -6,7 +6,6 @@ import { chromium, devices, firefox, webkit } from "playwright";
 
 const PRIVATE_REPORT_PATH = process.env.PRIVATE_REPORT_PATH || path.join(os.tmpdir(), "private-report.json");
 const PUBLIC_SUMMARY_PATH = process.env.PUBLIC_SUMMARY_PATH || path.join(os.tmpdir(), "public-summary.json");
-const SYNTHETIC_PARAM = process.env.SYNTHETIC_QUERY_PARAM || "synthetic_monitor";
 
 const BLOCKED_PATH_PARTS = ["/api/", "/admin", "/login", "/logout", "/checkout", "/cart", "/account", "/privacy", "/terms", "/cookie", "/wp-admin"];
 const EXCLUDED_EXTERNAL_HOST_SUFFIXES = ["facebook.com", "instagram.com", "youtube.com", "youtu.be", "twitter.com", "x.com", "reddit.com", "t.me", "telegram.me", "discord.com", "discord.gg", "shopify.com"];
@@ -34,8 +33,7 @@ function weightedPick(items) {
   return items[0];
 }
 
-function addSyntheticMarker(value) { const url = new URL(value); url.searchParams.set(SYNTHETIC_PARAM, "1"); return url.href; }
-function normalizeVisitedUrl(value) { const url = new URL(value); url.hash = ""; url.searchParams.delete(SYNTHETIC_PARAM); return url.href; }
+function normalizeVisitedUrl(value) { const url = new URL(value); url.hash = ""; return url.href; }
 
 const profiles = [
   { id: "chromium-desktop", browser: "chromium", deviceCategory: "desktop", weight: 40, context: { viewport: pick([{width:1366,height:768},{width:1440,height:900},{width:1536,height:864},{width:1920,height:1080}]), locale: "en-US" } },
@@ -82,7 +80,8 @@ async function collectLinks(page) {
 }
 function chooseBest(candidates) { if (!candidates.length) return null; const sorted=[...candidates].sort((a,b)=>b.score-a.score); const top=sorted[0].score; return pick(sorted.filter((x)=>x.score>=top-8)); }
 async function findLinkToOrigin(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{return new URL(c.href).origin===origin;}catch{return false;}})); }
-async function findHomeLink(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);return u.origin===origin && u.pathname.replace(/\/+$/,"")==="";}catch{return false;}})); }
+async function findHomeLink(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);return u.origin===origin && u.pathname.replace(/\/+$/,
+"")==="";}catch{return false;}})); }
 async function findSecondaryLink(page, primaryOrigin, configuredOrigin) {
   const links = await collectLinks(page);
   if (configuredOrigin) return chooseBest(links.filter((c)=>{try{return new URL(c.href).origin===configuredOrigin;}catch{return false;}}));
@@ -131,14 +130,14 @@ async function readPage(page, deviceCategory, nextLink = null) {
 async function collectInternalLinks(page, origin, visited) { return (await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);u.hash="";return u.origin===origin && !visited.has(normalizeVisitedUrl(u.href)) && !hasBlockedPath(u);}catch{return false;}}); }
 
 async function clickLink(context, sourcePage, meta, expectedOrigin) {
-  const link = sourcePage.locator("a[href]").nth(meta.index); const originalHref=meta.href; const markedHref=addSyntheticMarker(originalHref);
+  const link = sourcePage.locator("a[href]").nth(meta.index); const originalHref=meta.href; const destinationHref=originalHref;
   await link.scrollIntoViewIfNeeded().catch(()=>undefined);
-  await link.evaluate((el, href)=>{el.removeAttribute("target");el.setAttribute("href",href);}, markedHref);
+  await link.evaluate((el, href)=>{el.removeAttribute("target");el.setAttribute("href",href);}, destinationHref);
   const same = sourcePage.waitForURL((u)=>{try{return new URL(u.toString()).origin===expectedOrigin;}catch{return false;}},{timeout:45000,waitUntil:"domcontentloaded"}).then(()=>({page:sourcePage,mode:"same-tab"})).catch(()=>null);
   const popup = context.waitForEvent("page",{timeout:45000}).then(async(p)=>{await p.waitForLoadState("domcontentloaded",{timeout:20000}).catch(()=>undefined);return new URL(p.url()).origin===expectedOrigin?{page:p,mode:"popup"}:null;}).catch(()=>null);
   await link.click({timeout:12000}); const destination=await Promise.race([same,popup]); if(!destination) throw new Error("link_navigation_timeout");
   await destination.page.waitForLoadState("domcontentloaded",{timeout:15000}).catch(()=>undefined);
-  return {...destination,click:{text:meta.text,context:meta.context,structuralTag:meta.structuralTag,originalUrl:originalHref,navigatedUrl:markedHref}};
+  return {...destination,click:{text:meta.text,context:meta.context,structuralTag:meta.structuralTag,originalUrl:originalHref,navigatedUrl:destinationHref}};
 }
 
 async function exploreSite(context, page, origin, entryAction, deviceCategory) {
@@ -158,7 +157,7 @@ async function exploreSite(context, page, origin, entryAction, deviceCategory) {
 async function returnToHome(context,page,origin,deviceCategory) {
   const home=await findHomeLink(page,origin);
   if(home){await readPage(page,deviceCategory,home);const d=await clickLink(context,page,home,origin);return{page:d.page,mode:"clicked-home-link",click:d.click};}
-  await page.goto(addSyntheticMarker(new URL("/",origin).href),{waitUntil:"domcontentloaded",timeout:40000}); return{page,mode:"direct-navigation",click:null};
+  await page.goto(new URL("/",origin).href,{waitUntil:"domcontentloaded",timeout:40000}); return{page,mode:"direct-navigation",click:null};
 }
 
 const testId=crypto.randomUUID(); const startedAt=Date.now(); const profile=weightedPick(profiles);
@@ -172,7 +171,7 @@ let publicSummary={status:"failed",profile:profile.id,browser:profile.browser,de
 try {
   const targetUrl=requireHttpUrl("TARGET_URL",process.env.TARGET_URL); const configuredSecondaryUrl=optionalHttpUrl("SECONDARY_ORIGIN",process.env.SECONDARY_ORIGIN); if(!sourceValues.length) throw new Error("missing_source_urls"); const sourceUrl=requireHttpUrl("SOURCE_URL",pick(sourceValues));
   privateReport={...privateReport,sourceUrl:sourceUrl.href,targetUrl:targetUrl.href,configuredSecondaryOrigin:configuredSecondaryUrl?.origin||null};
-  const visitorIp=await capturePublicIp(); browser=await browserTypeFor(profile.browser).launch({headless:false}); const context=await browser.newContext(profile.context); const analyticsBlocked=await installAnalyticsBlock(context); let page=await context.newPage();
+  const visitorIp=await capturePublicIp(); browser=await browserTypeFor(profile.browser).launch({headless:false}); const context=await browser.newContext(profile.context); await context.setExtraHTTPHeaders({"X-Synthetic-Monitor":"1"}); const analyticsBlocked=await installAnalyticsBlock(context); let page=await context.newPage();
   await page.goto(sourceUrl.href,{waitUntil:"domcontentloaded",timeout:40000}); await page.waitForTimeout(randomBetween(900,2200));
   const targetLink=await findLinkToOrigin(page,targetUrl.origin); if(!targetLink) throw new Error("target_link_not_found");
   const sourcePageTitle=await page.title(); const sourceReading=await readPage(page,profile.deviceCategory,targetLink); const primaryDestination=await clickLink(context,page,targetLink,targetUrl.origin); page=primaryDestination.page;
