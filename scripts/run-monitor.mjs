@@ -47,13 +47,34 @@ async function capturePublicIp() {
   try { const r = await fetch("https://www.cloudflare.com/cdn-cgi/trace", { signal: AbortSignal.timeout(10000) }); if (!r.ok) return null; const line = (await r.text()).split("\n").find((x) => x.startsWith("ip=")); return line?.slice(3).trim() || null; } catch { return null; }
 }
 
-async function installAnalyticsBlock(context) {
-  if (String(process.env.BLOCK_ANALYTICS || "true").toLowerCase() !== "true") return false;
+async function installRequestRouting(context, allowedOrigins) {
+  const allowed = new Set(allowedOrigins.filter(Boolean));
+  const analyticsBlocked = String(process.env.BLOCK_ANALYTICS || "true").toLowerCase() === "true";
+
   await context.route("**/*", async (route) => {
-    try { const host = new URL(route.request().url()).hostname.toLowerCase(); if (ANALYTICS_HOST_SUFFIXES.some((s) => hostMatchesSuffix(host, s))) return route.abort("blockedbyclient"); } catch {}
+    const request = route.request();
+    try {
+      const url = new URL(request.url());
+      const host = url.hostname.toLowerCase();
+
+      if (analyticsBlocked && ANALYTICS_HOST_SUFFIXES.some((suffix) => hostMatchesSuffix(host, suffix))) {
+        return route.abort("blockedbyclient");
+      }
+
+      if (allowed.has(url.origin)) {
+        return route.continue({
+          headers: {
+            ...request.headers(),
+            "X-Synthetic-Monitor": "1",
+          },
+        });
+      }
+    } catch {}
+
     await route.continue();
   });
-  return true;
+
+  return analyticsBlocked;
 }
 
 async function linkMetadata(link, index, pageUrl) {
@@ -80,8 +101,7 @@ async function collectLinks(page) {
 }
 function chooseBest(candidates) { if (!candidates.length) return null; const sorted=[...candidates].sort((a,b)=>b.score-a.score); const top=sorted[0].score; return pick(sorted.filter((x)=>x.score>=top-8)); }
 async function findLinkToOrigin(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{return new URL(c.href).origin===origin;}catch{return false;}})); }
-async function findHomeLink(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);return u.origin===origin && u.pathname.replace(/\/+$/,
-"")==="";}catch{return false;}})); }
+async function findHomeLink(page, origin) { return chooseBest((await collectLinks(page)).filter((c)=>{try{const u=new URL(c.href);return u.origin===origin && u.pathname.replace(/\/+$/,")")===")";}catch{return false;}})); }
 async function findSecondaryLink(page, primaryOrigin, configuredOrigin) {
   const links = await collectLinks(page);
   if (configuredOrigin) return chooseBest(links.filter((c)=>{try{return new URL(c.href).origin===configuredOrigin;}catch{return false;}}));
@@ -171,7 +191,7 @@ let publicSummary={status:"failed",profile:profile.id,browser:profile.browser,de
 try {
   const targetUrl=requireHttpUrl("TARGET_URL",process.env.TARGET_URL); const configuredSecondaryUrl=optionalHttpUrl("SECONDARY_ORIGIN",process.env.SECONDARY_ORIGIN); if(!sourceValues.length) throw new Error("missing_source_urls"); const sourceUrl=requireHttpUrl("SOURCE_URL",pick(sourceValues));
   privateReport={...privateReport,sourceUrl:sourceUrl.href,targetUrl:targetUrl.href,configuredSecondaryOrigin:configuredSecondaryUrl?.origin||null};
-  const visitorIp=await capturePublicIp(); browser=await browserTypeFor(profile.browser).launch({headless:false}); const context=await browser.newContext(profile.context); await context.setExtraHTTPHeaders({"X-Synthetic-Monitor":"1"}); const analyticsBlocked=await installAnalyticsBlock(context); let page=await context.newPage();
+  const visitorIp=await capturePublicIp(); browser=await browserTypeFor(profile.browser).launch({headless:false}); const context=await browser.newContext(profile.context); const analyticsBlocked=await installRequestRouting(context,[sourceUrl.origin,targetUrl.origin,configuredSecondaryUrl?.origin]); let page=await context.newPage();
   await page.goto(sourceUrl.href,{waitUntil:"domcontentloaded",timeout:40000}); await page.waitForTimeout(randomBetween(900,2200));
   const targetLink=await findLinkToOrigin(page,targetUrl.origin); if(!targetLink) throw new Error("target_link_not_found");
   const sourcePageTitle=await page.title(); const sourceReading=await readPage(page,profile.deviceCategory,targetLink); const primaryDestination=await clickLink(context,page,targetLink,targetUrl.origin); page=primaryDestination.page;
