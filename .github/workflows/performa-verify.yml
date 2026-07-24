@@ -59,3 +59,5 @@ jobs:
           } > comment.md
           gh issue comment 3 --repo "${{ github.repository }}" --body-file comment.md
           exit 0
+
+# verification trigger: resilient-navigation-v2
