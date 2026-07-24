@@ -3,9 +3,13 @@ import { chromium, devices, firefox, webkit } from "playwright";
 const PERFORMA_ORIGIN = new URL(process.env.PERFORMA_ORIGIN || "https://performa.com").origin;
 const BLOCKED_PATH_PARTS = ["/api/", "/admin", "/login", "/logout", "/checkout", "/cart", "/account", "/privacy", "/terms", "/cookie", "/wp-admin"];
 const ANALYTICS_HOST_SUFFIXES = ["google-analytics.com", "googletagmanager.com", "doubleclick.net", "clarity.ms", "hotjar.com", "hotjar.io", "facebook.net"];
+const SYNTHETIC_HEADER = {
+  "X-Synthetic-Monitor": "1",
+};
 
 const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
 const pick = (values) => values[randomBetween(0, values.length - 1)];
+const chance = (probability) => Math.random() < probability;
 const hostMatchesSuffix = (hostname, suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`);
 
 function requireHttpUrl(name, value) {
@@ -52,7 +56,7 @@ async function installRequestRouting(context, allowedOrigins) {
         return route.continue({
           headers: {
             ...request.headers(),
-            "X-Synthetic-Monitor": "1",
+            ...SYNTHETIC_HEADER,
           },
         });
       }
@@ -123,11 +127,11 @@ async function clickLink(context, sourcePage, metadata, expectedOrigin) {
   return destination;
 }
 
-async function readPage(page, deviceCategory, minDwellMs = 6000, maxDwellMs = 15000) {
+async function readPage(page, deviceCategory, minDwellMs = 7000, maxDwellMs = 18000) {
   const viewport = page.viewportSize() || { width: 1440, height: 900 };
   const documentHeight = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
   const maxScroll = Math.max(0, documentHeight - viewport.height);
-  const target = Math.round(maxScroll * (randomBetween(55, 92) / 100));
+  const target = Math.round(maxScroll * (randomBetween(45, 96) / 100));
 
   if (deviceCategory === "desktop") {
     await page.mouse.move(
@@ -139,23 +143,39 @@ async function readPage(page, deviceCategory, minDwellMs = 6000, maxDwellMs = 15
 
   let current = await page.evaluate(() => window.scrollY);
   while (current < target - 25) {
-    const step = Math.min(target - current, randomBetween(180, Math.max(240, Math.round(viewport.height * 0.55))));
+    const step = Math.min(target - current, randomBetween(160, Math.max(240, Math.round(viewport.height * 0.65))));
     if (deviceCategory === "desktop") await page.mouse.wheel(0, step);
     else await page.evaluate((dy) => window.scrollBy({ top: dy, behavior: "smooth" }), step);
-    await page.waitForTimeout(randomBetween(650, 1600));
+    await page.waitForTimeout(randomBetween(550, 1800));
     current = await page.evaluate(() => window.scrollY);
+  }
+
+  if (maxScroll > 0 && chance(0.3)) {
+    const reverseBy = randomBetween(100, Math.max(140, Math.round(viewport.height * 0.45)));
+    if (deviceCategory === "desktop") await page.mouse.wheel(0, -reverseBy).catch(() => undefined);
+    else await page.evaluate((dy) => window.scrollBy({ top: -dy, behavior: "smooth" }), reverseBy).catch(() => undefined);
+    await page.waitForTimeout(randomBetween(700, 2200));
   }
 
   await page.waitForTimeout(randomBetween(minDwellMs, maxDwellMs));
 }
 
-async function browseSite(context, page, origin, profile, minPages = 4, maxPages = 7) {
+async function browseSite(context, page, origin, profile, options = {}) {
+  const {
+    minPages = 6,
+    maxPages = 10,
+    minDwellMs = 7000,
+    maxDwellMs = 18000,
+    homeReturnChance = 0.15,
+  } = options;
+
   const desiredPages = randomBetween(minPages, maxPages);
   const visited = new Set();
   let pagesVisited = 0;
 
   for (let i = 0; i < desiredPages; i += 1) {
     visited.add(normalizeVisitedUrl(page.url()));
+
     const candidates = (await collectLinks(page)).filter((link) => {
       try {
         const url = new URL(link.href);
@@ -164,15 +184,27 @@ async function browseSite(context, page, origin, profile, minPages = 4, maxPages
       } catch { return false; }
     });
 
-    await readPage(page, profile.deviceCategory, 6000, 15000);
+    await readPage(page, profile.deviceCategory, minDwellMs, maxDwellMs);
     pagesVisited += 1;
-    if (i === desiredPages - 1 || candidates.length === 0) break;
+
+    if (i === desiredPages - 1) break;
+
+    if (i > 1 && chance(homeReturnChance)) {
+      const homeUrl = new URL("/", origin).href;
+      if (normalizeVisitedUrl(page.url()) !== normalizeVisitedUrl(homeUrl)) {
+        await page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 40000 }).catch(() => undefined);
+        await page.waitForTimeout(randomBetween(1000, 3200));
+        continue;
+      }
+    }
+
+    if (candidates.length === 0) break;
 
     page = await clickLink(context, page, pick(candidates), origin);
-    await page.waitForTimeout(randomBetween(1200, 2600));
+    await page.waitForTimeout(randomBetween(900, 3400));
   }
 
-  return { page, pagesVisited };
+  return { page, pagesVisited, desiredPages };
 }
 
 const feederValues = [
@@ -195,18 +227,37 @@ try {
   const analyticsBlocked = await installRequestRouting(context, [targetUrl.origin, PERFORMA_ORIGIN]);
   let page = await context.newPage();
 
+  const feederPlan = {
+    minPages: 6,
+    maxPages: 10,
+    minDwellMs: 7000,
+    maxDwellMs: 19000,
+    homeReturnChance: 0.18,
+  };
+
+  const performaPlan = {
+    minPages: 6,
+    maxPages: 11,
+    minDwellMs: 8000,
+    maxDwellMs: 22000,
+    homeReturnChance: 0.12,
+  };
+
   await page.goto(targetUrl.href, { waitUntil: "domcontentloaded", timeout: 40000 });
-  const targetResult = await browseSite(context, page, targetUrl.origin, profile, 4, 7);
+  const targetResult = await browseSite(context, page, targetUrl.origin, profile, feederPlan);
   page = targetResult.page;
 
   await page.goto(new URL("/", targetUrl.origin).href, { waitUntil: "domcontentloaded", timeout: 40000 });
+  await page.waitForTimeout(randomBetween(1200, 4200));
+
   const performaLink = await findLinkToOrigin(page, PERFORMA_ORIGIN, true);
   if (!performaLink) throw new Error("performa_link_not_found");
 
-  await readPage(page, profile.deviceCategory, 4000, 9000);
+  await readPage(page, profile.deviceCategory, 5000, 12000);
   page = await clickLink(context, page, performaLink, PERFORMA_ORIGIN);
+  await page.waitForTimeout(randomBetween(1200, 4000));
 
-  const performaResult = await browseSite(context, page, PERFORMA_ORIGIN, profile, 4, 7);
+  const performaResult = await browseSite(context, page, PERFORMA_ORIGIN, profile, performaPlan);
   page = performaResult.page;
 
   console.log(JSON.stringify({
@@ -216,7 +267,9 @@ try {
     profile: profile.id,
     feederSite: targetUrl.origin,
     feederPagesVisited: targetResult.pagesVisited,
+    feederPagesPlanned: targetResult.desiredPages,
     performaPagesVisited: performaResult.pagesVisited,
+    performaPagesPlanned: performaResult.desiredPages,
     finalUrl: page.url(),
     durationMs: Date.now() - startedAt,
   }));
