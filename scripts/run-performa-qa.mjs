@@ -1,6 +1,5 @@
 import { chromium, devices, firefox, webkit } from "playwright";
 
-const SYNTHETIC_PARAM = process.env.SYNTHETIC_QUERY_PARAM || "synthetic_monitor";
 const PERFORMA_ORIGIN = new URL(process.env.PERFORMA_ORIGIN || "https://performa.com").origin;
 const BLOCKED_PATH_PARTS = ["/api/", "/admin", "/login", "/logout", "/checkout", "/cart", "/account", "/privacy", "/terms", "/cookie", "/wp-admin"];
 const ANALYTICS_HOST_SUFFIXES = ["google-analytics.com", "googletagmanager.com", "doubleclick.net", "clarity.ms", "hotjar.com", "hotjar.io", "facebook.net"];
@@ -16,16 +15,9 @@ function requireHttpUrl(name, value) {
   return parsed;
 }
 
-function addSyntheticMarker(value) {
-  const url = new URL(value);
-  url.searchParams.set(SYNTHETIC_PARAM, "1");
-  return url.href;
-}
-
 function normalizeVisitedUrl(value) {
   const url = new URL(value);
   url.hash = "";
-  url.searchParams.delete(SYNTHETIC_PARAM);
   return url.href;
 }
 
@@ -90,12 +82,12 @@ async function findLinkToOrigin(page, origin, preferImage = false) {
 
 async function clickLink(context, sourcePage, metadata, expectedOrigin) {
   const link = sourcePage.locator("a[href]").nth(metadata.index);
-  const markedHref = addSyntheticMarker(metadata.href);
+  const destinationHref = metadata.href;
   await link.scrollIntoViewIfNeeded().catch(() => undefined);
   await link.evaluate((element, href) => {
     element.removeAttribute("target");
     element.setAttribute("href", href);
-  }, markedHref);
+  }, destinationHref);
 
   const sameTab = sourcePage.waitForURL((url) => {
     try { return new URL(url.toString()).origin === expectedOrigin; } catch { return false; }
@@ -182,14 +174,15 @@ let browser;
 try {
   browser = await browserTypeFor(profile.browser).launch({ headless: false });
   const context = await browser.newContext(profile.context);
+  await context.setExtraHTTPHeaders({ "X-Synthetic-Monitor": "1" });
   const analyticsBlocked = await installAnalyticsBlock(context);
   let page = await context.newPage();
 
-  await page.goto(addSyntheticMarker(targetUrl.href), { waitUntil: "domcontentloaded", timeout: 40000 });
+  await page.goto(targetUrl.href, { waitUntil: "domcontentloaded", timeout: 40000 });
   const targetResult = await browseSite(context, page, targetUrl.origin, profile, 4, 7);
   page = targetResult.page;
 
-  await page.goto(addSyntheticMarker(new URL("/", targetUrl.origin).href), { waitUntil: "domcontentloaded", timeout: 40000 });
+  await page.goto(new URL("/", targetUrl.origin).href, { waitUntil: "domcontentloaded", timeout: 40000 });
   const performaLink = await findLinkToOrigin(page, PERFORMA_ORIGIN, true);
   if (!performaLink) throw new Error("performa_link_not_found");
 
