@@ -4,44 +4,55 @@ on:
   schedule:
     - cron: "1,16,31,46 * * * *"
       timezone: "Europe/London"
+    - cron: "4,19,34,49 * * * *"
+      timezone: "Europe/London"
+    - cron: "10,25,40,55 * * * *"
+      timezone: "Europe/London"
+    - cron: "13,28,43,58 * * * *"
+      timezone: "Europe/London"
+    - cron: "6,21,36,51 * * * *"
+      timezone: "Europe/London"
   workflow_dispatch:
+    inputs:
+      feeder:
+        description: "Feeder site to run"
+        required: true
+        default: "bitcash"
+        type: choice
+        options:
+          - bitcash
+          - bitdova
+          - docstr
+          - nftworldnews
+          - subsocket
 
 permissions:
   contents: read
 
 jobs:
   performa-qa:
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - id: bitcash
-            feeder: "https://bitcash.dev/"
-            delay_seconds: 0
-          - id: bitdova
-            feeder: "https://bitdova.com/"
-            delay_seconds: 120
-          - id: docstr
-            feeder: "https://docstr.app/"
-            delay_seconds: 240
-          - id: nftworldnews
-            feeder: "https://nftworldnews.tech/"
-            delay_seconds: 360
-          - id: subsocket
-            feeder: "https://subsocket.io/"
-            delay_seconds: 480
     concurrency:
-      group: performa-synthetic-qa-${{ matrix.id }}
+      group: performa-synthetic-qa-${{ github.event.schedule || inputs.feeder || 'manual' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      FEEDER_URL_1: ${{ matrix.feeder }}
       PERFORMA_ORIGIN: "https://performa.com"
       # SYNTHETIC_QUERY_PARAM: "synthetic_monitor"
       # BLOCK_ANALYTICS: "false"
 
     steps:
+      - name: Select feeder
+        shell: bash
+        run: |
+          case "${{ github.event.schedule }}:${{ inputs.feeder }}" in
+            "4,19,34,49 * * * *:"|":bitdova") echo "FEEDER_URL_1=https://bitdova.com/" >> "$GITHUB_ENV" ;;
+            "10,25,40,55 * * * *:"|":docstr") echo "FEEDER_URL_1=https://docstr.app/" >> "$GITHUB_ENV" ;;
+            "13,28,43,58 * * * *:"|":nftworldnews") echo "FEEDER_URL_1=https://nftworldnews.tech/" >> "$GITHUB_ENV" ;;
+            "6,21,36,51 * * * *:"|":subsocket") echo "FEEDER_URL_1=https://subsocket.io/" >> "$GITHUB_ENV" ;;
+            *) echo "FEEDER_URL_1=https://bitcash.dev/" >> "$GITHUB_ENV" ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v4
         with:
@@ -57,10 +68,6 @@ jobs:
 
       - name: Install Playwright browsers
         run: npx playwright install --with-deps chromium firefox webkit
-
-      - name: Stagger feeder execution
-        if: ${{ matrix.delay_seconds > 0 }}
-        run: sleep ${{ matrix.delay_seconds }}
 
       - name: Validate Performa QA script
         run: node --check scripts/run-performa-qa.mjs
