@@ -1,9 +1,8 @@
 name: One-off verify resilient Performa QA
 
 on:
-  push:
-    paths:
-      - '.github/workflows/performa-verify.yml'
+  issues:
+    types: [opened]
 
 permissions:
   contents: read
@@ -11,6 +10,7 @@ permissions:
 
 jobs:
   verify:
+    if: github.event.issue.title == 'Run Performa QA verification'
     strategy:
       fail-fast: false
       matrix:
@@ -57,7 +57,5 @@ jobs:
             echo
             echo "exit_code=$status"
           } > comment.md
-          gh issue comment 3 --repo "${{ github.repository }}" --body-file comment.md
+          gh issue comment "${{ github.event.issue.number }}" --repo "${{ github.repository }}" --body-file comment.md
           exit 0
-
-# verification trigger: resilient-navigation-v2
