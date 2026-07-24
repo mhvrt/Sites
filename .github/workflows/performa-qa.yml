@@ -9,19 +9,27 @@ on:
 permissions:
   contents: read
 
-concurrency:
-  group: performa-synthetic-qa
-  cancel-in-progress: false
-
 jobs:
   performa-qa:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: bitcash
+            feeder: "https://bitcash.dev/"
+          - id: bitdova
+            feeder: "https://bitdova.com/"
+          - id: docstr
+            feeder: "https://docstr.app/"
+          - id: nftworldnews
+            feeder: "https://nftworldnews.tech/"
+    concurrency:
+      group: performa-synthetic-qa-${{ matrix.id }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 30
     env:
-      FEEDER_URL_1: "https://bitcash.dev/"
-      FEEDER_URL_2: "https://bitdova.com/"
-      FEEDER_URL_3: "https://docstr.app/"
-      FEEDER_URL_4: "https://nftworldnews.tech/"
+      FEEDER_URL_1: ${{ matrix.feeder }}
       PERFORMA_ORIGIN: "https://performa.com"
       # SYNTHETIC_QUERY_PARAM: "synthetic_monitor"
       # BLOCK_ANALYTICS: "false"
