@@ -72,5 +72,12 @@ jobs:
       - name: Validate Performa QA script
         run: node --check scripts/run-performa-qa.mjs
 
+      - name: Random second jitter
+        shell: bash
+        run: |
+          delay=$((RANDOM % 60))
+          echo "Random QA delay: ${delay}s"
+          sleep "$delay"
+
       - name: Run extended Performa QA journey
         run: xvfb-run -a node scripts/run-performa-qa.mjs
