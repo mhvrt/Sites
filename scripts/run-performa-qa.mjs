@@ -1,30 +1,78 @@
 import { chromium, devices, firefox, webkit } from "playwright";
 
 const PERFORMA_ORIGIN = new URL(process.env.PERFORMA_ORIGIN || "https://performa.com").origin;
-const BLOCKED_PATH_PARTS = ["/api/", "/admin", "/login", "/logout", "/checkout", "/cart", "/account", "/privacy", "/terms", "/cookie", "/wp-admin"];
-const ANALYTICS_HOST_SUFFIXES = ["google-analytics.com", "googletagmanager.com", "doubleclick.net", "clarity.ms", "hotjar.com", "hotjar.io", "facebook.net"];
+const BLOCKED_PATH_PARTS = [
+  "/api/",
+  "/admin",
+  "/login",
+  "/logout",
+  "/checkout",
+  "/cart",
+  "/account",
+  "/privacy",
+  "/terms",
+  "/cookie",
+  "/wp-admin",
+];
+const BLOCKED_FILE_EXTENSIONS = /\.(?:pdf|zip|rar|7z|docx?|xlsx?|pptx?|csv|xml|json|txt)(?:$|[?#])/i;
+const ANALYTICS_HOST_SUFFIXES = [
+  "google-analytics.com",
+  "googletagmanager.com",
+  "doubleclick.net",
+  "clarity.ms",
+  "hotjar.com",
+  "hotjar.io",
+  "facebook.net",
+];
 const SYNTHETIC_HEADER = {
   "X-Synthetic-Monitor": "1",
 };
 
 const CLOUDFLARE_ACCOUNT_ID = String(process.env.CLOUDFLARE_ACCOUNT_ID || "").trim();
 const CLOUDFLARE_AI_TOKEN = String(process.env.CLOUDFLARE_AI_TOKEN || "").trim();
-const CLOUDFLARE_AI_MODEL = String(process.env.CLOUDFLARE_AI_MODEL || "@cf/ibm-granite/granite-4.0-h-micro").trim();
+const CLOUDFLARE_AI_MODEL = String(
+  process.env.CLOUDFLARE_AI_MODEL || "@cf/ibm-granite/granite-4.0-h-micro",
+).trim();
 const AI_ENABLED = Boolean(CLOUDFLARE_ACCOUNT_ID && CLOUDFLARE_AI_TOKEN);
 const AI_MAX_DECISIONS = Math.max(0, Number.parseInt(process.env.AI_MAX_DECISIONS || "10", 10) || 0);
-const AI_DECISION_PROBABILITY = Math.min(1, Math.max(0, Number.parseFloat(process.env.AI_DECISION_PROBABILITY || "0.85") || 0));
+const AI_DECISION_PROBABILITY = Math.min(
+  1,
+  Math.max(0, Number.parseFloat(process.env.AI_DECISION_PROBABILITY || "0.85") || 0),
+);
 const AI_REQUEST_TIMEOUT_MS = 9000;
 
 const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
 const pick = (values) => values[randomBetween(0, values.length - 1)];
 const chance = (probability) => Math.random() < probability;
 const hostMatchesSuffix = (hostname, suffix) => hostname === suffix || hostname.endsWith(`.${suffix}`);
+const normalizeHost = (hostname) => String(hostname || "").toLowerCase().replace(/^www\./, "");
 
 function requireHttpUrl(name, value) {
   if (!value) throw new Error(`missing_${name.toLowerCase()}`);
   const parsed = new URL(value);
   if (!["http:", "https:"].includes(parsed.protocol)) throw new Error(`invalid_${name.toLowerCase()}`);
   return parsed;
+}
+
+function siteKey(value) {
+  const url = value instanceof URL ? value : new URL(value);
+  return `${url.protocol}//${normalizeHost(url.hostname)}`;
+}
+
+function isSameSite(value, expectedOrigin) {
+  try {
+    return siteKey(value) === siteKey(expectedOrigin);
+  } catch {
+    return false;
+  }
+}
+
+function isPerformaUrl(value) {
+  try {
+    return normalizeHost(new URL(value).hostname) === "performa.com";
+  } catch {
+    return false;
+  }
 }
 
 function normalizeVisitedUrl(value) {
@@ -34,7 +82,12 @@ function normalizeVisitedUrl(value) {
 }
 
 function hasBlockedPath(url) {
-  return BLOCKED_PATH_PARTS.some((part) => url.pathname.toLowerCase().includes(part));
+  const pathname = url.pathname.toLowerCase();
+  return BLOCKED_PATH_PARTS.some((part) => pathname.includes(part));
+}
+
+function isNavigablePageUrl(url) {
+  return !hasBlockedPath(url) && !BLOCKED_FILE_EXTENSIONS.test(`${url.pathname}${url.search}`);
 }
 
 function cleanText(value, maxLength = 120) {
@@ -79,16 +132,36 @@ function parseAiDecision(raw) {
 }
 
 const profiles = [
-  { id: "chromium-desktop", browser: "chromium", deviceCategory: "desktop", context: { viewport: { width: 1440, height: 900 }, locale: "en-US" } },
-  { id: "chromium-android", browser: "chromium", deviceCategory: "mobile", context: { ...devices["Pixel 7"], locale: "en-US" } },
-  { id: "firefox-desktop", browser: "firefox", deviceCategory: "desktop", context: { viewport: { width: 1366, height: 768 }, locale: "en-US" } },
-  { id: "webkit-iphone", browser: "webkit", deviceCategory: "mobile", context: { ...devices["iPhone 13"], locale: "en-US" } },
+  {
+    id: "chromium-desktop",
+    browser: "chromium",
+    deviceCategory: "desktop",
+    context: { viewport: { width: 1440, height: 900 }, locale: "en-US" },
+  },
+  {
+    id: "chromium-android",
+    browser: "chromium",
+    deviceCategory: "mobile",
+    context: { ...devices["Pixel 7"], locale: "en-US" },
+  },
+  {
+    id: "firefox-desktop",
+    browser: "firefox",
+    deviceCategory: "desktop",
+    context: { viewport: { width: 1366, height: 768 }, locale: "en-US" },
+  },
+  {
+    id: "webkit-iphone",
+    browser: "webkit",
+    deviceCategory: "mobile",
+    context: { ...devices["iPhone 13"], locale: "en-US" },
+  },
 ];
 
-const browserTypeFor = (name) => name === "firefox" ? firefox : name === "webkit" ? webkit : chromium;
+const browserTypeFor = (name) => (name === "firefox" ? firefox : name === "webkit" ? webkit : chromium);
 
 async function installRequestRouting(context, allowedOrigins) {
-  const allowed = new Set(allowedOrigins.filter(Boolean));
+  const allowedSites = new Set(allowedOrigins.filter(Boolean).map((value) => siteKey(value)));
   const analyticsBlocked = String(process.env.BLOCK_ANALYTICS || "false").toLowerCase() === "true";
 
   await context.route("**/*", async (route) => {
@@ -101,7 +174,7 @@ async function installRequestRouting(context, allowedOrigins) {
         return route.abort("blockedbyclient");
       }
 
-      if (allowed.has(url.origin)) {
+      if (allowedSites.has(siteKey(url))) {
         return route.continue({
           headers: {
             ...request.headers(),
@@ -117,7 +190,53 @@ async function installRequestRouting(context, allowedOrigins) {
   return analyticsBlocked;
 }
 
-async function collectLinks(page) {
+async function acceptCookieConsent(page) {
+  if (!isPerformaUrl(page.url())) return false;
+
+  const overlay = page.locator('[class*="cookie-consent"], [class*="cookie_banner"], [class*="cookie-banner"]').first();
+  const overlayVisible = await overlay.isVisible().catch(() => false);
+  if (!overlayVisible) return false;
+
+  const candidates = page.locator('button, [role="button"]');
+  const count = Math.min(await candidates.count(), 40);
+  const positivePatterns = [
+    /^accept all$/i,
+    /^accept$/i,
+    /^allow all$/i,
+    /^allow$/i,
+    /^agree$/i,
+    /^i agree$/i,
+    /^got it$/i,
+    /^ok$/i,
+    /^okay$/i,
+    /accept all cookies/i,
+    /allow all cookies/i,
+  ];
+
+  for (let index = 0; index < count; index += 1) {
+    const button = candidates.nth(index);
+    if (!(await button.isVisible().catch(() => false))) continue;
+    const text = cleanText(
+      (await button.innerText().catch(() => "")) ||
+      (await button.getAttribute("aria-label").catch(() => "")) ||
+      (await button.getAttribute("title").catch(() => "")),
+      80,
+    );
+    if (!positivePatterns.some((pattern) => pattern.test(text))) continue;
+
+    try {
+      await button.click({ timeout: 5000 });
+      await page.waitForTimeout(1200);
+      console.log(`Cookie consent accepted on Performa via: ${text || "button"}`);
+      return true;
+    } catch {}
+  }
+
+  console.warn("Performa cookie consent overlay is visible but no accept button was clicked");
+  return false;
+}
+
+async function collectLinks(page, deviceCategory = null) {
   const links = page.locator("a[href]");
   const count = Math.min(await links.count(), 400);
   const out = [];
@@ -131,11 +250,30 @@ async function collectLinks(page) {
     try {
       const url = new URL(href, page.url());
       if (!["http:", "https:"].includes(url.protocol)) continue;
+      if (!isNavigablePageUrl(url)) continue;
+
+      const elementState = await link.evaluate((element) => {
+        let current = element;
+        let classTrail = "";
+        let ariaHidden = false;
+        for (let depth = 0; current && depth < 5; depth += 1, current = current.parentElement) {
+          classTrail += ` ${typeof current.className === "string" ? current.className : ""}`;
+          if (current.getAttribute?.("aria-hidden") === "true") ariaHidden = true;
+        }
+        return {
+          ariaHidden,
+          mobileNav: /mobile[-_\s]?nav|header-mobile|mobile-menu/i.test(classTrail),
+        };
+      }).catch(() => ({ ariaHidden: false, mobileNav: false }));
+
+      if (elementState.ariaHidden) continue;
+      if (deviceCategory === "desktop" && elementState.mobileNav) continue;
+
       const hasImage = await link.locator("img").count().then((value) => value > 0).catch(() => false);
       const text = cleanText(
-        await link.innerText().catch(() => "") ||
-        await link.getAttribute("aria-label").catch(() => "") ||
-        await link.getAttribute("title").catch(() => "") ||
+        (await link.innerText().catch(() => "")) ||
+        (await link.getAttribute("aria-label").catch(() => "")) ||
+        (await link.getAttribute("title").catch(() => "")) ||
         url.pathname,
       );
       out.push({ index, href: url.href, hasImage, text });
@@ -145,10 +283,8 @@ async function collectLinks(page) {
   return out;
 }
 
-async function findLinkToOrigin(page, origin, preferImage = false) {
-  const matches = (await collectLinks(page)).filter((link) => {
-    try { return new URL(link.href).origin === origin; } catch { return false; }
-  });
+async function findLinkToOrigin(page, origin, preferImage = false, deviceCategory = null) {
+  const matches = (await collectLinks(page, deviceCategory)).filter((link) => isSameSite(link.href, origin));
   if (!matches.length) return null;
   if (preferImage) {
     const imageLinks = matches.filter((link) => link.hasImage);
@@ -208,7 +344,7 @@ async function chooseCandidateWithAi({ page, candidates, visited, siteRole, step
     "You are an autonomous website QA exploration planner.",
     "Choose exactly one supplied visible internal link that gives useful, varied coverage of the current site.",
     "Prefer meaningful content, product, feature, documentation, blog, news, about, FAQ, and informational pages.",
-    "Avoid repetitive paths and avoid login, account, checkout, cart, admin, legal/privacy/terms, or actions that submit forms or change data.",
+    "Avoid repetitive paths and avoid login, account, checkout, cart, admin, legal/privacy/terms, downloads, or actions that submit forms or change data.",
     "Never invent a URL and never choose anything outside the supplied candidates.",
     "Return JSON only in this exact shape: {\"candidateId\": number}.",
   ].join(" ");
@@ -247,29 +383,53 @@ async function chooseCandidateWithAi({ page, candidates, visited, siteRole, step
 async function clickLink(context, sourcePage, metadata, expectedOrigin) {
   const link = sourcePage.locator("a[href]").nth(metadata.index);
   const destinationHref = metadata.href;
+
+  if (isPerformaUrl(sourcePage.url())) await acceptCookieConsent(sourcePage);
+
   await link.scrollIntoViewIfNeeded().catch(() => undefined);
   await link.evaluate((element, href) => {
     element.removeAttribute("target");
     element.setAttribute("href", href);
   }, destinationHref);
 
-  const sameTab = sourcePage.waitForURL((url) => {
-    try { return new URL(url.toString()).origin === expectedOrigin; } catch { return false; }
-  }, { timeout: 45000, waitUntil: "domcontentloaded" }).then(() => sourcePage).catch(() => null);
+  const waitForDestination = () => {
+    const sameTab = sourcePage.waitForURL(
+      (url) => isSameSite(url.toString(), expectedOrigin),
+      { timeout: 30000, waitUntil: "domcontentloaded" },
+    ).then(() => sourcePage).catch(() => null);
 
-  const popup = context.waitForEvent("page", { timeout: 45000 }).then(async (page) => {
-    await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => undefined);
-    try { return new URL(page.url()).origin === expectedOrigin ? page : null; } catch { return null; }
-  }).catch(() => null);
+    const popup = context.waitForEvent("page", { timeout: 30000 }).then(async (page) => {
+      await page.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => undefined);
+      return isSameSite(page.url(), expectedOrigin) ? page : null;
+    }).catch(() => null);
 
-  await link.click({ timeout: 12000 });
-  const destination = await Promise.race([sameTab, popup]);
+    return Promise.race([sameTab, popup]);
+  };
+
+  let destinationPromise = waitForDestination();
+  try {
+    await link.click({ timeout: 9000 });
+  } catch (error) {
+    console.warn(`Physical click failed for ${destinationHref}: ${error?.message || "unknown_error"}; trying DOM click`);
+    await link.evaluate((element) => element.click()).catch(() => undefined);
+  }
+
+  let destination = await destinationPromise;
+  if (!destination && isSameSite(destinationHref, expectedOrigin)) {
+    console.warn(`Click navigation did not complete for ${destinationHref}; using same-site goto fallback`);
+    await sourcePage.goto(destinationHref, { waitUntil: "domcontentloaded", timeout: 30000 });
+    destination = sourcePage;
+  }
+
   if (!destination) throw new Error("link_navigation_timeout");
   await destination.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => undefined);
+  if (isPerformaUrl(destination.url())) await acceptCookieConsent(destination);
   return destination;
 }
 
 async function readPage(page, deviceCategory, minDwellMs = 7000, maxDwellMs = 18000) {
+  if (isPerformaUrl(page.url())) await acceptCookieConsent(page);
+
   const viewport = page.viewportSize() || { width: 1440, height: 900 };
   const documentHeight = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight));
   const maxScroll = Math.max(0, documentHeight - viewport.height);
@@ -313,17 +473,28 @@ async function browseSite(context, page, origin, profile, options = {}, aiState,
 
   const desiredPages = randomBetween(minPages, maxPages);
   const visited = new Set();
+  const failedUrls = new Set();
   let pagesVisited = 0;
+  let clickFallbacks = 0;
 
   for (let i = 0; i < desiredPages; i += 1) {
     visited.add(normalizeVisitedUrl(page.url()));
+    if (siteRole === "performa") await acceptCookieConsent(page);
 
-    const candidates = (await collectLinks(page)).filter((link) => {
+    const allCandidates = (await collectLinks(page, profile.deviceCategory)).filter((link) => {
       try {
         const url = new URL(link.href);
         url.hash = "";
-        return url.origin === origin && !visited.has(normalizeVisitedUrl(url.href)) && !hasBlockedPath(url);
-      } catch { return false; }
+        const normalized = normalizeVisitedUrl(url.href);
+        return (
+          isSameSite(url, origin) &&
+          !visited.has(normalized) &&
+          !failedUrls.has(normalized) &&
+          isNavigablePageUrl(url)
+        );
+      } catch {
+        return false;
+      }
     });
 
     await readPage(page, profile.deviceCategory, minDwellMs, maxDwellMs);
@@ -335,29 +506,53 @@ async function browseSite(context, page, origin, profile, options = {}, aiState,
       const homeUrl = new URL("/", origin).href;
       if (normalizeVisitedUrl(page.url()) !== normalizeVisitedUrl(homeUrl)) {
         await page.goto(homeUrl, { waitUntil: "domcontentloaded", timeout: 40000 }).catch(() => undefined);
+        if (siteRole === "performa") await acceptCookieConsent(page);
         await page.waitForTimeout(randomBetween(1000, 3200));
         continue;
       }
     }
 
-    if (candidates.length === 0) break;
+    if (allCandidates.length === 0) break;
 
-    const nextCandidate = await chooseCandidateWithAi({
-      page,
-      candidates,
-      visited,
-      siteRole,
-      step: i,
-      desiredPages,
-      aiState,
-    });
-    if (!nextCandidate) break;
+    let remainingCandidates = [...allCandidates];
+    let navigated = false;
+    const maxAttempts = Math.min(3, remainingCandidates.length);
 
-    page = await clickLink(context, page, nextCandidate, origin);
-    await page.waitForTimeout(randomBetween(900, 3400));
+    for (let attempt = 0; attempt < maxAttempts && remainingCandidates.length > 0; attempt += 1) {
+      const nextCandidate = await chooseCandidateWithAi({
+        page,
+        candidates: remainingCandidates,
+        visited,
+        siteRole,
+        step: i,
+        desiredPages,
+        aiState,
+      });
+      if (!nextCandidate) break;
+
+      try {
+        page = await clickLink(context, page, nextCandidate, origin);
+        navigated = true;
+        await page.waitForTimeout(randomBetween(900, 3400));
+        break;
+      } catch (error) {
+        clickFallbacks += 1;
+        const normalizedFailed = normalizeVisitedUrl(nextCandidate.href);
+        failedUrls.add(normalizedFailed);
+        remainingCandidates = remainingCandidates.filter(
+          (candidate) => normalizeVisitedUrl(candidate.href) !== normalizedFailed,
+        );
+        console.warn(`Skipping failed QA link ${nextCandidate.href}: ${error?.message || "unknown_error"}`);
+      }
+    }
+
+    if (!navigated) {
+      console.warn(`No usable internal link after retries on ${page.url()}; ending this site exploration cleanly`);
+      break;
+    }
   }
 
-  return { page, pagesVisited, desiredPages };
+  return { page, pagesVisited, desiredPages, clickFallbacks };
 }
 
 const feederValues = [
@@ -378,12 +573,30 @@ const aiState = {
   randomDecisions: 0,
   fallbacks: 0,
 };
+const networkStats = {
+  analyticsRequests: 0,
+  gaCollectRequests: 0,
+};
 let browser;
 
 try {
   browser = await browserTypeFor(profile.browser).launch({ headless: false });
   const context = await browser.newContext(profile.context);
-  const analyticsBlocked = await installRequestRouting(context, [targetUrl.origin, PERFORMA_ORIGIN]);
+  const analyticsBlocked = await installRequestRouting(context, [targetUrl.origin, PERFORMA_ORIGIN, "https://www.performa.com"]);
+
+  context.on("request", (request) => {
+    try {
+      const url = new URL(request.url());
+      const host = url.hostname.toLowerCase();
+      if (ANALYTICS_HOST_SUFFIXES.some((suffix) => hostMatchesSuffix(host, suffix))) {
+        networkStats.analyticsRequests += 1;
+      }
+      if (hostMatchesSuffix(host, "google-analytics.com") && /\/g\/collect(?:$|[?])/i.test(url.pathname + url.search)) {
+        networkStats.gaCollectRequests += 1;
+      }
+    } catch {}
+  });
+
   let page = await context.newPage();
 
   const feederPlan = {
@@ -409,12 +622,13 @@ try {
   await page.goto(new URL("/", targetUrl.origin).href, { waitUntil: "domcontentloaded", timeout: 40000 });
   await page.waitForTimeout(randomBetween(1200, 4200));
 
-  const performaLink = await findLinkToOrigin(page, PERFORMA_ORIGIN, true);
+  const performaLink = await findLinkToOrigin(page, PERFORMA_ORIGIN, true, profile.deviceCategory);
   if (!performaLink) throw new Error("performa_link_not_found");
 
   await readPage(page, profile.deviceCategory, 5000, 12000);
   page = await clickLink(context, page, performaLink, PERFORMA_ORIGIN);
-  await page.waitForTimeout(randomBetween(1200, 4000));
+  await acceptCookieConsent(page);
+  await page.waitForTimeout(randomBetween(1800, 4500));
 
   const performaResult = await browseSite(context, page, PERFORMA_ORIGIN, profile, performaPlan, aiState, "performa");
   page = performaResult.page;
@@ -423,6 +637,8 @@ try {
     status: "success",
     synthetic: true,
     analyticsBlocked,
+    analyticsRequestsObserved: networkStats.analyticsRequests,
+    gaCollectRequestsObserved: networkStats.gaCollectRequests,
     aiEnabled: AI_ENABLED,
     aiModel: AI_ENABLED ? CLOUDFLARE_AI_MODEL : null,
     aiCalls: aiState.calls,
@@ -433,8 +649,10 @@ try {
     feederSite: targetUrl.origin,
     feederPagesVisited: targetResult.pagesVisited,
     feederPagesPlanned: targetResult.desiredPages,
+    feederClickFallbacks: targetResult.clickFallbacks,
     performaPagesVisited: performaResult.pagesVisited,
     performaPagesPlanned: performaResult.desiredPages,
+    performaClickFallbacks: performaResult.clickFallbacks,
     finalUrl: page.url(),
     durationMs: Date.now() - startedAt,
   }));
