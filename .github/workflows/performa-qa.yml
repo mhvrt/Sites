@@ -2,15 +2,15 @@ name: Extended Performa synthetic QA
 
 on:
   schedule:
-    - cron: "1,16,31,46 * * * *"
+    - cron: "0,10,20,30,40,50 * * * *"
       timezone: "Europe/London"
-    - cron: "4,19,34,49 * * * *"
+    - cron: "2,12,22,32,42,52 * * * *"
       timezone: "Europe/London"
-    - cron: "10,25,40,55 * * * *"
+    - cron: "6,16,26,36,46,56 * * * *"
       timezone: "Europe/London"
-    - cron: "13,28,43,58 * * * *"
+    - cron: "8,18,28,38,48,58 * * * *"
       timezone: "Europe/London"
-    - cron: "6,21,36,51 * * * *"
+    - cron: "4,14,24,34,44,54 * * * *"
       timezone: "Europe/London"
   workflow_dispatch:
     inputs:
@@ -46,10 +46,10 @@ jobs:
         shell: bash
         run: |
           case "${{ github.event.schedule }}:${{ inputs.feeder }}" in
-            "4,19,34,49 * * * *:"|":bitdova") echo "FEEDER_URL_1=https://bitdova.com/" >> "$GITHUB_ENV" ;;
-            "10,25,40,55 * * * *:"|":docstr") echo "FEEDER_URL_1=https://docstr.app/" >> "$GITHUB_ENV" ;;
-            "13,28,43,58 * * * *:"|":nftworldnews") echo "FEEDER_URL_1=https://nftworldnews.tech/" >> "$GITHUB_ENV" ;;
-            "6,21,36,51 * * * *:"|":subsocket") echo "FEEDER_URL_1=https://subsocket.io/" >> "$GITHUB_ENV" ;;
+            "2,12,22,32,42,52 * * * *:"|":bitdova") echo "FEEDER_URL_1=https://bitdova.com/" >> "$GITHUB_ENV" ;;
+            "6,16,26,36,46,56 * * * *:"|":docstr") echo "FEEDER_URL_1=https://docstr.app/" >> "$GITHUB_ENV" ;;
+            "8,18,28,38,48,58 * * * *:"|":nftworldnews") echo "FEEDER_URL_1=https://nftworldnews.tech/" >> "$GITHUB_ENV" ;;
+            "4,14,24,34,44,54 * * * *:"|":subsocket") echo "FEEDER_URL_1=https://subsocket.io/" >> "$GITHUB_ENV" ;;
             *) echo "FEEDER_URL_1=https://bitcash.dev/" >> "$GITHUB_ENV" ;;
           esac
 
