@@ -1,0 +1,66 @@
+name: Bing RSS rank check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check all domains in Bing RSS US results
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const checks = [
+            ['angrymonky.com', 'Kryptex'],
+            ['journeyofstardust.com', 'Solana Price'],
+            ['tothesmart.com', 'bitcoin crash'],
+            ['gemstock.tech', 'Blockchair'],
+            ['buildsquad.net', 'best dogecoin wallets'],
+            ['uniquebinars.io', 'Maschinenring mining'],
+            ['subsocket.io', 'DGB hashrate chart'],
+            ['kryptobulls.io', 'crypto payment gateway without kyc'],
+            ['spectachain.io', 'is xrp a stablecoin'],
+            ['solamatrendz.com', 'Solama Coin'],
+            ['bitcash.dev', 'how to buy stablecoin'],
+            ['bitdova.com', 'is crypto dead'],
+            ['docstr.app', 'how to mine bitcoin'],
+            ['nftworldnews.tech', 'what is a nonce crypto']
+          ];
+          const decode = s => s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"');
+          const strip = s => decode(s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/<[^>]+>/g,''));
+          const norm = h => (h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const report={market:'US/en-US',checkedAt:new Date().toISOString(),checks:[],found:null};
+            for(const [domain,query] of checks){
+              const u='https://www.bing.com/search?q='+encodeURIComponent(query)+'&format=rss&cc=US&setlang=en-US';
+              let entry={domain,query,url:u};
+              try{
+                const res=await fetch(u,{headers:{'User-Agent':'Mozilla/5.0'}});
+                const text=await res.text();
+                entry.status=res.status; entry.contentType=res.headers.get('content-type'); entry.bodyPrefix=text.slice(0,300);
+                const items=[...text.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map((m,i)=>{
+                  const b=m[1];
+                  const title=(b.match(/<title>([\s\S]*?)<\/title>/i)||[])[1]||'';
+                  const link=(b.match(/<link>([\s\S]*?)<\/link>/i)||[])[1]||'';
+                  const cleanLink=strip(link).trim();
+                  let host=''; try{host=new URL(cleanLink).hostname}catch{}
+                  return {rank:i+1,title:strip(title).trim(),url:cleanLink,host};
+                });
+                entry.items=items; entry.count=items.length;
+                entry.hit=items.find(x=>{const h=norm(x.host),d=norm(domain);return h===d||h.endsWith('.'+d)})||null;
+                report.checks.push(entry);
+                if(entry.hit){report.found={domain,query,...entry.hit};break;}
+              }catch(e){entry.error=String(e&&e.message||e);report.checks.push(entry)}
+            }
+            fs.writeFileSync('bing-rss-rank.json',JSON.stringify(report,null,2));
+            console.log(JSON.stringify({found:report.found,checks:report.checks.map(x=>({domain:x.domain,query:x.query,status:x.status,count:x.count,hit:x.hit,contentType:x.contentType}))},null,2));
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-rss-rank
+          path: bing-rss-rank.json
+          retention-days: 1
