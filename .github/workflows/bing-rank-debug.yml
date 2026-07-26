@@ -1,0 +1,50 @@
+name: Bing rank markup diagnostic
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Inspect Bing result markup
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const { chromium } = require('playwright');
+          (async () => {
+            const browser = await chromium.launch({headless:true});
+            const context = await browser.newContext({locale:'en-US'});
+            const page = await context.newPage();
+            const resp = await page.goto('https://www.bing.com/search?q=Kryptex&count=50&setlang=en-US&cc=US', {waitUntil:'domcontentloaded', timeout:30000});
+            await page.waitForTimeout(1500);
+            const data = await page.evaluate(() => ({
+              statusText: document.title,
+              body: document.body.innerText.slice(0,12000),
+              anchors: [...document.querySelectorAll('a[href]')].slice(0,300).map(a => ({text:(a.innerText||a.textContent||'').trim().slice(0,250), href:a.href, cls:a.className || '', parent:(a.parentElement&&a.parentElement.tagName)||''})),
+              selectors: {
+                b_algo: document.querySelectorAll('li.b_algo').length,
+                b_results_links: document.querySelectorAll('#b_results a[href]').length,
+                h2links: document.querySelectorAll('h2 a[href]').length,
+                allLinks: document.querySelectorAll('a[href]').length
+              }
+            }));
+            data.status = resp ? resp.status() : null;
+            data.url = page.url();
+            fs.writeFileSync('bing-debug.json', JSON.stringify(data,null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-debug
+          path: bing-debug.json
+          retention-days: 1
