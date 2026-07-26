@@ -1,0 +1,78 @@
+name: Bing form based rank verifier
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: buildsquad
+            domain: buildsquad.net
+            query: best dogecoin wallets
+          - id: uniquebinars
+            domain: uniquebinars.io
+            query: Maschinenring mining
+          - id: spectachain
+            domain: spectachain.io
+            query: is xrp a stablecoin
+          - id: gemstock
+            domain: gemstock.tech
+            query: Blockchair
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Search Bing via form
+        env:
+          CHECK_ID: ${{ matrix.id }}
+          DOMAIN: ${{ matrix.domain }}
+          QUERY: ${{ matrix.query }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const {chromium}=require('playwright');
+          function decodeBing(href){try{const u=new URL(href).searchParams.get('u');if(u&&u.startsWith('a1'))return Buffer.from(u.slice(2),'base64').toString('utf8')}catch{}return href}
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const id=process.env.CHECK_ID, domain=process.env.DOMAIN, query=process.env.QUERY;
+            const browser=await chromium.launch({headless:true});
+            const context=await browser.newContext({locale:'en-US',timezoneId:'America/New_York'});
+            const page=await context.newPage();
+            let out={id,domain,query,checkedAt:new Date().toISOString()};
+            try{
+              const home=await page.goto('https://www.bing.com/?cc=US&setlang=en-US',{waitUntil:'domcontentloaded',timeout:30000});
+              out.homeStatus=home?home.status():null;
+              const input=page.locator('#sb_form_q, input[name="q"]').first();
+              await input.waitFor({state:'visible',timeout:15000});
+              await input.fill(query);
+              await input.press('Enter');
+              await page.waitForLoadState('domcontentloaded',{timeout:30000});
+              await page.waitForTimeout(1500);
+              out.finalUrl=page.url(); out.title=await page.title();
+              const body=(await page.locator('body').innerText()).slice(0,900);
+              out.challenge=/one last step|solve the challenge|captcha/i.test(body);
+              out.bodyPrefix=body;
+              const raw=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a[href]');return a?{title:(a.textContent||'').trim(),href:a.href}:null}).filter(Boolean));
+              out.results=raw.slice(0,10).map((r,i)=>{const target=decodeBing(r.href);let host='';try{host=new URL(target).hostname}catch{}return{rank:i+1,title:r.title,url:target,host}});
+              out.count=out.results.length;
+              out.hit=out.results.find(r=>{const h=norm(r.host);return h===norm(domain)||h.endsWith('.'+norm(domain))})||null;
+            }catch(e){out.error=String(e&&e.message||e)}
+            fs.writeFileSync(`bing-form-${id}.json`,JSON.stringify(out,null,2));
+            console.log(JSON.stringify({id,domain,query,hit:out.hit,challenge:out.challenge,count:out.count,finalUrl:out.finalUrl,error:out.error},null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-form-${{ matrix.id }}
+          path: bing-form-${{ matrix.id }}.json
+          retention-days: 1
