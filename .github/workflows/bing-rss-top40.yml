@@ -1,0 +1,68 @@
+name: Bing RSS top40 rank check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Check Bing RSS top 40
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const checks = [
+            ['angrymonky.com', 'Kryptex'],
+            ['journeyofstardust.com', 'Solana Price'],
+            ['tothesmart.com', 'bitcoin crash'],
+            ['gemstock.tech', 'Blockchair'],
+            ['buildsquad.net', 'best dogecoin wallets'],
+            ['uniquebinars.io', 'Maschinenring mining'],
+            ['subsocket.io', 'DGB hashrate chart'],
+            ['kryptobulls.io', 'crypto payment gateway without kyc'],
+            ['spectachain.io', 'is xrp a stablecoin'],
+            ['solamatrendz.com', 'Solama Coin'],
+            ['bitcash.dev', 'how to buy stablecoin'],
+            ['bitdova.com', 'is crypto dead'],
+            ['docstr.app', 'how to mine bitcoin'],
+            ['nftworldnews.tech', 'what is a nonce crypto']
+          ];
+          const decode=s=>s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"');
+          const strip=s=>decode(s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/<[^>]+>/g,''));
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          async function getPage(query,first){
+            const u='https://www.bing.com/search?q='+encodeURIComponent(query)+'&format=rss&cc=US&setlang=en-US&first='+first;
+            const res=await fetch(u,{headers:{'User-Agent':'Mozilla/5.0'}});
+            const text=await res.text();
+            const items=[...text.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map((m,i)=>{
+              const b=m[1];
+              const title=(b.match(/<title>([\s\S]*?)<\/title>/i)||[])[1]||'';
+              const link=(b.match(/<link>([\s\S]*?)<\/link>/i)||[])[1]||'';
+              const clean=strip(link).trim(); let host='';try{host=new URL(clean).hostname}catch{}
+              return {offsetRank:first+i,title:strip(title).trim(),url:clean,host};
+            });
+            return {first,status:res.status,items,bodyPrefix:text.slice(0,150)};
+          }
+          (async()=>{
+            const report={market:'US/en-US',checkedAt:new Date().toISOString(),checks:[],found:null};
+            for(const [domain,query] of checks){
+              const entry={domain,query,pages:[]};
+              for(const first of [1,11,21,31]){
+                const page=await getPage(query,first); entry.pages.push(page);
+                const hit=page.items.find(x=>{const h=norm(x.host),d=norm(domain);return h===d||h.endsWith('.'+d)});
+                if(hit){entry.hit=hit;report.found={domain,query,...hit,first};break;}
+              }
+              report.checks.push(entry);
+              if(report.found) break;
+            }
+            fs.writeFileSync('bing-rss-top40.json',JSON.stringify(report,null,2));
+            console.log(JSON.stringify({found:report.found,summary:report.checks.map(e=>({domain:e.domain,query:e.query,hit:e.hit||null,pages:e.pages.map(p=>({first:p.first,status:p.status,count:p.items.length,hosts:p.items.map(x=>x.host)}))}))},null,2));
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-rss-top40
+          path: bing-rss-top40.json
+          retention-days: 1
