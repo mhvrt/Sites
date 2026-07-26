@@ -1,0 +1,84 @@
+name: Bing Firefox US top40 hit detector
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      max-parallel: 24
+      matrix:
+        include:
+          - {id: angrymonky, domain: angrymonky.com, query: Kryptex, page: 1, first: 1}
+          - {id: angrymonky, domain: angrymonky.com, query: Kryptex, page: 2, first: 11}
+          - {id: angrymonky, domain: angrymonky.com, query: Kryptex, page: 3, first: 21}
+          - {id: angrymonky, domain: angrymonky.com, query: Kryptex, page: 4, first: 31}
+          - {id: tothesmart, domain: tothesmart.com, query: bitcoin crash, page: 1, first: 1}
+          - {id: tothesmart, domain: tothesmart.com, query: bitcoin crash, page: 2, first: 11}
+          - {id: tothesmart, domain: tothesmart.com, query: bitcoin crash, page: 3, first: 21}
+          - {id: tothesmart, domain: tothesmart.com, query: bitcoin crash, page: 4, first: 31}
+          - {id: kryptobulls, domain: kryptobulls.io, query: crypto payment gateway without kyc, page: 1, first: 1}
+          - {id: kryptobulls, domain: kryptobulls.io, query: crypto payment gateway without kyc, page: 2, first: 11}
+          - {id: kryptobulls, domain: kryptobulls.io, query: crypto payment gateway without kyc, page: 3, first: 21}
+          - {id: kryptobulls, domain: kryptobulls.io, query: crypto payment gateway without kyc, page: 4, first: 31}
+          - {id: solamatrendz, domain: solamatrendz.com, query: Solama Coin, page: 1, first: 1}
+          - {id: solamatrendz, domain: solamatrendz.com, query: Solama Coin, page: 2, first: 11}
+          - {id: solamatrendz, domain: solamatrendz.com, query: Solama Coin, page: 3, first: 21}
+          - {id: solamatrendz, domain: solamatrendz.com, query: Solama Coin, page: 4, first: 31}
+          - {id: bitcash, domain: bitcash.dev, query: how to buy stablecoin, page: 1, first: 1}
+          - {id: bitcash, domain: bitcash.dev, query: how to buy stablecoin, page: 2, first: 11}
+          - {id: bitcash, domain: bitcash.dev, query: how to buy stablecoin, page: 3, first: 21}
+          - {id: bitcash, domain: bitcash.dev, query: how to buy stablecoin, page: 4, first: 31}
+          - {id: bitdova, domain: bitdova.com, query: is crypto dead, page: 1, first: 1}
+          - {id: bitdova, domain: bitdova.com, query: is crypto dead, page: 2, first: 11}
+          - {id: bitdova, domain: bitdova.com, query: is crypto dead, page: 3, first: 21}
+          - {id: bitdova, domain: bitdova.com, query: is crypto dead, page: 4, first: 31}
+          - {id: docstr, domain: docstr.app, query: how to mine bitcoin, page: 1, first: 1}
+          - {id: docstr, domain: docstr.app, query: how to mine bitcoin, page: 2, first: 11}
+          - {id: docstr, domain: docstr.app, query: how to mine bitcoin, page: 3, first: 21}
+          - {id: docstr, domain: docstr.app, query: how to mine bitcoin, page: 4, first: 31}
+          - {id: nftworldnews, domain: nftworldnews.tech, query: what is a nonce crypto, page: 1, first: 1}
+          - {id: nftworldnews, domain: nftworldnews.tech, query: what is a nonce crypto, page: 2, first: 11}
+          - {id: nftworldnews, domain: nftworldnews.tech, query: what is a nonce crypto, page: 3, first: 21}
+          - {id: nftworldnews, domain: nftworldnews.tech, query: what is a nonce crypto, page: 4, first: 31}
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps firefox
+      - name: Check one Bing US SERP page
+        env:
+          DOMAIN: ${{ matrix.domain }}
+          QUERY: ${{ matrix.query }}
+          PAGE_NO: ${{ matrix.page }}
+          FIRST: ${{ matrix.first }}
+        run: |
+          node <<'NODE'
+          const {firefox}=require('playwright');
+          function decodeBing(href){try{const u=new URL(href).searchParams.get('u');if(u&&u.startsWith('a1'))return Buffer.from(u.slice(2),'base64').toString('utf8')}catch{}return href}
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const domain=process.env.DOMAIN, query=process.env.QUERY, pageNo=Number(process.env.PAGE_NO), first=Number(process.env.FIRST);
+            const browser=await firefox.launch({headless:true});
+            const context=await browser.newContext({locale:'en-US',timezoneId:'America/New_York'});
+            const page=await context.newPage();
+            const url='https://www.bing.com/search?q='+encodeURIComponent(query)+'&first='+first+'&FORM=PERE&cc=US&setlang=en-US';
+            const resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
+            await page.waitForTimeout(1200);
+            const body=(await page.locator('body').innerText()).slice(0,1200);
+            const challenge=/one last step|solve the challenge|captcha|unusual traffic/i.test(body);
+            const market=await page.evaluate(()=>({region:window._G?.Region||null,mkt:window._G?.Mkt||null})).catch(()=>({}));
+            const raw=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a[href]');return a?{title:(a.textContent||'').trim(),href:a.href}:null}).filter(Boolean).slice(0,10));
+            const results=raw.map((r,i)=>{const target=decodeBing(r.href);let host='';try{host=new URL(target).hostname}catch{}return{rank:(pageNo-1)*10+i+1,title:r.title,url:target,host}});
+            const hit=results.find(r=>{const h=norm(r.host),d=norm(domain);return h===d||h.endsWith('.'+d)})||null;
+            console.log(JSON.stringify({domain,query,page:pageNo,status:resp?resp.status():null,challenge,market,count:results.length,hit,hosts:results.map(r=>r.host)},null,2));
+            await browser.close();
+            if(hit){console.error('HIT '+domain+' rank '+hit.rank+' '+hit.url);process.exit(42)}
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
