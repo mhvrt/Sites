@@ -1,0 +1,80 @@
+name: Buildsquad Bing US top40 verifier
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - page: 1
+            first: 1
+            slot: a
+          - page: 1
+            first: 1
+            slot: b
+          - page: 2
+            first: 11
+            slot: a
+          - page: 2
+            first: 11
+            slot: b
+          - page: 3
+            first: 21
+            slot: a
+          - page: 3
+            first: 21
+            slot: b
+          - page: 4
+            first: 31
+            slot: a
+          - page: 4
+            first: 31
+            slot: b
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Check Buildsquad on Bing US
+        env:
+          PAGE_NO: ${{ matrix.page }}
+          FIRST: ${{ matrix.first }}
+          SLOT: ${{ matrix.slot }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const {chromium}=require('playwright');
+          function decodeBing(href){try{const u=new URL(href).searchParams.get('u');if(u&&u.startsWith('a1'))return Buffer.from(u.slice(2),'base64').toString('utf8')}catch{}return href}
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const domain='buildsquad.net', query='best dogecoin wallets';
+            const pageNo=Number(process.env.PAGE_NO), first=Number(process.env.FIRST), slot=process.env.SLOT;
+            const browser=await chromium.launch({headless:true});
+            const context=await browser.newContext({locale:'en-US'});
+            const page=await context.newPage();
+            const url='https://www.bing.com/search?q='+encodeURIComponent(query)+'&setlang=en-US&cc=US&first='+first;
+            const resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
+            await page.waitForTimeout(1300);
+            const raw=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a[href]');return a?{title:(a.textContent||'').trim(),href:a.href}:null}).filter(Boolean));
+            const results=raw.slice(0,10).map((r,i)=>{const target=decodeBing(r.href);let host='';try{host=new URL(target).hostname}catch{}return{positionWithinPage:i+1,title:r.title,url:target,host}});
+            const hit=results.find(r=>{const h=norm(r.host);return h===norm(domain)||h.endsWith('.'+norm(domain))})||null;
+            const body=(await page.locator('body').innerText()).slice(0,600);
+            const out={domain,query,page:pageNo,first,slot,market:'US/en-US',status:resp?resp.status():null,finalUrl:page.url(),count:results.length,hit,results,challenge:/one last step|solve the challenge|captcha/i.test(body),bodyPrefix:body,checkedAt:new Date().toISOString()};
+            fs.writeFileSync(`buildsquad-${pageNo}-${slot}.json`,JSON.stringify(out,null,2));
+            console.log(JSON.stringify({page:pageNo,slot,count:results.length,hit,challenge:out.challenge},null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: buildsquad-${{ matrix.page }}-${{ matrix.slot }}
+          path: buildsquad-${{ matrix.page }}-${{ matrix.slot }}.json
+          retention-days: 1
