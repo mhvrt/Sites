@@ -1,1 +1,2 @@
 Temporary trigger for Bing connectivity verification.
+Strict validation rerun.
