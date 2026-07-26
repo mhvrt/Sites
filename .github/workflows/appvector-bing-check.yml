@@ -1,0 +1,108 @@
+name: AppVector Bing US rank check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Inspect AppVector and run Bing checks
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const { chromium } = require('playwright');
+
+          const checks = [
+            ['buildsquad.net', 'best dogecoin wallets'],
+            ['spectachain.io', 'is xrp a stablecoin'],
+            ['uniquebinars.io', 'Maschinenring mining'],
+            ['gemstock.tech', 'Blockchair']
+          ];
+          const norm = h => (h || '').toLowerCase().replace(/^www\./, '');
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({ locale: 'en-US', timezoneId: 'America/New_York' });
+            const page = await context.newPage();
+            const network = [];
+            page.on('response', async r => {
+              const url = r.url();
+              if (/api|serp|bing|search/i.test(url)) {
+                let body = '';
+                try {
+                  const ct = r.headers()['content-type'] || '';
+                  if (/json|text/i.test(ct)) body = (await r.text()).slice(0, 50000);
+                } catch {}
+                network.push({ url, status: r.status(), contentType: r.headers()['content-type'] || '', body });
+              }
+            });
+
+            const report = { checkedAt: new Date().toISOString(), checks: [], diagnostics: {} };
+            const home = await page.goto('https://appvector.io/tools/bing-rank-checker', { waitUntil: 'domcontentloaded', timeout: 30000 });
+            await page.waitForTimeout(1500);
+            report.diagnostics.homeStatus = home ? home.status() : null;
+            report.diagnostics.title = await page.title();
+            report.diagnostics.inputs = await page.locator('input').evaluateAll(els => els.map((e,i)=>({i,type:e.type,name:e.name,placeholder:e.placeholder,value:e.value,aria:e.getAttribute('aria-label')})));
+            report.diagnostics.buttons = await page.locator('button').evaluateAll(els => els.map((e,i)=>({i,text:(e.innerText||e.textContent||'').trim(),type:e.type,disabled:e.disabled,aria:e.getAttribute('aria-label')})));
+            report.diagnostics.selects = await page.locator('select').evaluateAll(els => els.map((e,i)=>({i,name:e.name,value:e.value,options:[...e.options].map(o=>({text:o.text,value:o.value,selected:o.selected})).slice(0,50)})));
+
+            for (const [domain, query] of checks) {
+              const entry = { domain, query };
+              try {
+                const input = page.locator('input').filter({ has: page.locator('') });
+                let keyword = page.locator('input[placeholder*="keyword" i]').first();
+                if (!(await keyword.count())) keyword = page.locator('input[type="text"]').first();
+                await keyword.fill(query);
+
+                const buttons = page.getByRole('button');
+                let run = page.getByRole('button', { name: /run.*bing|bing.*serp|check|search/i }).first();
+                if (!(await run.count())) run = buttons.filter({ hasText: /run|check|search/i }).first();
+                entry.buttonText = (await run.innerText().catch(()=>'')) || '';
+                await run.click();
+                await page.waitForTimeout(5000);
+
+                entry.url = page.url();
+                entry.body = (await page.locator('body').innerText()).slice(0, 25000);
+                entry.links = await page.locator('a[href]').evaluateAll(els => els.map((a,i)=>({i,text:(a.innerText||a.textContent||'').trim().slice(0,300),href:a.href})).filter(x=>x.text||x.href).slice(0,250));
+                entry.tables = await page.locator('table').evaluateAll(ts => ts.map(t => (t.innerText||'').slice(0,15000)));
+
+                const candidates = [];
+                const text = entry.body || '';
+                const lines = text.split(/\n+/).map(s=>s.trim()).filter(Boolean);
+                entry.lines = lines.slice(0,400);
+                for (const l of entry.links) {
+                  try {
+                    const h = norm(new URL(l.href).hostname);
+                    if (h === norm(domain) || h.endsWith('.' + norm(domain))) candidates.push(l);
+                  } catch {}
+                }
+                entry.domainLinks = candidates;
+                entry.domainMention = text.toLowerCase().includes(domain.toLowerCase());
+                report.checks.push(entry);
+                if (entry.domainMention || candidates.length) break;
+              } catch (e) {
+                entry.error = String(e && e.message || e);
+                entry.body = (await page.locator('body').innerText().catch(()=>'' )).slice(0,10000);
+                report.checks.push(entry);
+              }
+            }
+            report.network = network.slice(-200);
+            fs.writeFileSync('appvector-bing-result.json', JSON.stringify(report, null, 2));
+            console.log(JSON.stringify({diagnostics:report.diagnostics, checks:report.checks.map(x=>({domain:x.domain,query:x.query,error:x.error,buttonText:x.buttonText,domainMention:x.domainMention,domainLinks:x.domainLinks,url:x.url,bodyPrefix:(x.body||'').slice(0,1200)})), network:report.network.map(x=>({url:x.url,status:x.status,contentType:x.contentType,bodyPrefix:(x.body||'').slice(0,1000)}))}, null, 2));
+            await browser.close();
+          })().catch(e => { console.error(e); process.exit(1); });
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: appvector-bing-result
+          path: appvector-bing-result.json
+          retention-days: 1
