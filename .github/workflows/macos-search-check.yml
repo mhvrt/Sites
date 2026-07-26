@@ -1,0 +1,64 @@
+name: macOS search connectivity check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: macos-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install chromium
+      - name: Test Google and Yandex search
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { chromium } from 'playwright';
+          const browser = await chromium.launch({ headless: true });
+          const urls = [
+            ['google', 'https://www.google.com/search?q=openai&hl=en&gl=us&pws=0'],
+            ['yandex', 'https://yandex.ru/search/?text=openai']
+          ];
+          const out = {};
+          for (const [name, url] of urls) {
+            const page = await browser.newPage();
+            const started = Date.now();
+            try {
+              const response = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+              await page.waitForTimeout(1500);
+              const finalUrl = page.url();
+              const title = await page.title();
+              const body = (await page.locator('body').innerText().catch(() => '')).slice(0, 1200);
+              out[name] = {
+                status: response?.status() ?? null,
+                finalUrl,
+                title,
+                durationMs: Date.now() - started,
+                captchaLike: /unusual traffic|sorry\/index|captcha|showcaptchafast|verify you are human/i.test(finalUrl + '\n' + body),
+                bodyPrefix: body.slice(0, 300)
+              };
+            } catch (error) {
+              out[name] = { error: error instanceof Error ? error.message : String(error), finalUrl: page.url(), durationMs: Date.now() - started };
+            } finally {
+              await page.close();
+            }
+          }
+          await browser.close();
+          fs.writeFileSync('macos-search-result.json', JSON.stringify(out, null, 2));
+          console.log(JSON.stringify(out, null, 2));
+          NODE
+      - name: Upload result
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-search-result
+          path: macos-search-result.json
+          retention-days: 1
