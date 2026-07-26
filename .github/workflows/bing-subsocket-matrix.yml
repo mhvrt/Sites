@@ -1,0 +1,63 @@
+name: Bing subsocket top40 matrix
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  page:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - page: 1
+            first: 1
+          - page: 2
+            first: 11
+          - page: 3
+            first: 21
+          - page: 4
+            first: 31
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Check Bing page
+        env:
+          PAGE_NO: ${{ matrix.page }}
+          FIRST: ${{ matrix.first }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const {chromium}=require('playwright');
+          function decodeBing(href){try{const u=new URL(href).searchParams.get('u');if(u&&u.startsWith('a1'))return Buffer.from(u.slice(2),'base64').toString('utf8')}catch{}return href}
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const domain='subsocket.io',query='DGB hashrate chart';
+            const pageNo=Number(process.env.PAGE_NO), first=Number(process.env.FIRST);
+            const browser=await chromium.launch({headless:true});
+            const context=await browser.newContext({locale:'en-US'});
+            const page=await context.newPage();
+            const url='https://www.bing.com/search?q='+encodeURIComponent(query)+'&setlang=en-US&cc=US&first='+first;
+            const resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
+            await page.waitForTimeout(1200);
+            const raw=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a[href]');return a?{title:(a.textContent||'').trim(),href:a.href}:null}).filter(Boolean));
+            const results=raw.map((r,i)=>{const target=decodeBing(r.href);let host='';try{host=new URL(target).hostname}catch{}return{rank:(pageNo-1)*10+i+1,title:r.title,url:target,host}});
+            const hit=results.find(r=>{const h=norm(r.host);return h===domain||h.endsWith('.'+domain)})||null;
+            const body=(await page.locator('body').innerText()).slice(0,700);
+            const out={page:pageNo,first,status:resp?resp.status():null,finalUrl:page.url(),count:results.length,hit,results,challenge:/one last step|solve the challenge|captcha/i.test(body),bodyPrefix:body,checkedAt:new Date().toISOString()};
+            fs.writeFileSync(`bing-sub-page-${pageNo}.json`,JSON.stringify(out,null,2));
+            console.log(JSON.stringify({page:pageNo,count:results.length,hit,challenge:out.challenge},null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-sub-page-${{ matrix.page }}
+          path: bing-sub-page-${{ matrix.page }}.json
+          retention-days: 1
