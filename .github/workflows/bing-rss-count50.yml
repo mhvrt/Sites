@@ -1,0 +1,40 @@
+name: Bing RSS count50 test
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    steps:
+      - name: Test RSS count 50 and find supplied domains
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const checks=[
+            ['angrymonky.com','Kryptex'],['journeyofstardust.com','Solana Price'],['tothesmart.com','bitcoin crash'],['gemstock.tech','Blockchair'],['buildsquad.net','best dogecoin wallets'],['uniquebinars.io','Maschinenring mining'],['subsocket.io','DGB hashrate chart'],['kryptobulls.io','crypto payment gateway without kyc'],['spectachain.io','is xrp a stablecoin'],['solamatrendz.com','Solama Coin'],['bitcash.dev','how to buy stablecoin'],['bitdova.com','is crypto dead'],['docstr.app','how to mine bitcoin'],['nftworldnews.tech','what is a nonce crypto']
+          ];
+          const dec=s=>s.replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&#39;/g,"'").replace(/&quot;/g,'"');
+          const strip=s=>dec(s.replace(/<!\[CDATA\[([\s\S]*?)\]\]>/g,'$1').replace(/<[^>]+>/g,''));
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const out=[];
+            for(const [domain,query] of checks){
+              const url='https://www.bing.com/search?q='+encodeURIComponent(query)+'&format=rss&cc=US&setlang=en-US&count=50';
+              const r=await fetch(url,{headers:{'User-Agent':'Mozilla/5.0'}});const text=await r.text();
+              const items=[...text.matchAll(/<item>([\s\S]*?)<\/item>/gi)].map((m,i)=>{const b=m[1],link=(b.match(/<link>([\s\S]*?)<\/link>/i)||[])[1]||'',title=(b.match(/<title>([\s\S]*?)<\/title>/i)||[])[1]||'';const u=strip(link).trim();let host='';try{host=new URL(u).hostname}catch{}return{rank:i+1,title:strip(title).trim(),url:u,host}});
+              const hit=items.find(x=>{const h=norm(x.host),d=norm(domain);return h===d||h.endsWith('.'+d)})||null;
+              out.push({domain,query,status:r.status,count:items.length,hit,items});
+              if(hit)break;
+            }
+            fs.writeFileSync('rss-count50.json',JSON.stringify(out,null,2));
+            console.log(JSON.stringify(out.map(x=>({domain:x.domain,query:x.query,count:x.count,hit:x.hit,hosts:x.items.map(i=>i.host)})),null,2));
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: rss-count50
+          path: rss-count50.json
+          retention-days: 1
