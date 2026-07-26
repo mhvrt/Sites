@@ -1,0 +1,94 @@
+name: Bing US rank check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Check Bing US top 40
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const { chromium } = require('playwright');
+
+          const checks = [
+            ['angrymonky.com', 'Kryptex'],
+            ['journeyofstardust.com', 'Solana Price'],
+            ['tothesmart.com', 'bitcoin crash'],
+            ['gemstock.tech', 'Blockchair'],
+            ['buildsquad.net', 'best dogecoin wallets'],
+            ['uniquebinars.io', 'Maschinenring mining'],
+            ['subsocket.io', 'DGB hashrate chart'],
+            ['kryptobulls.io', 'crypto payment gateway without kyc'],
+            ['spectachain.io', 'is xrp a stablecoin'],
+            ['solamatrendz.com', 'Solama Coin'],
+            ['bitcash.dev', 'how to buy stablecoin'],
+            ['bitdova.com', 'is crypto dead'],
+            ['docstr.app', 'how to mine bitcoin'],
+            ['nftworldnews.tech', 'what is a nonce crypto']
+          ];
+
+          const normalize = h => (h || '').toLowerCase().replace(/^www\./, '');
+          const matches = (host, domain) => {
+            host = normalize(host); domain = normalize(domain);
+            return host === domain || host.endsWith('.' + domain);
+          };
+
+          (async () => {
+            const browser = await chromium.launch({ headless: true });
+            const context = await browser.newContext({
+              locale: 'en-US',
+              timezoneId: 'America/New_York',
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/136.0.0.0 Safari/537.36'
+            });
+            const page = await context.newPage();
+            const report = { market: 'US/en-US', checkedAt: new Date().toISOString(), checks: [], found: null };
+
+            for (const [domain, query] of checks) {
+              const url = 'https://www.bing.com/search?q=' + encodeURIComponent(query) + '&count=50&setlang=en-US&cc=US';
+              let entry = { domain, query, requestedUrl: url };
+              try {
+                const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+                await page.waitForTimeout(1200);
+                entry.status = resp ? resp.status() : null;
+                entry.finalUrl = page.url();
+                entry.title = await page.title();
+                const items = await page.locator('li.b_algo h2 a').evaluateAll(els => els.slice(0, 40).map((a, i) => ({ rank: i + 1, title: (a.textContent || '').trim(), url: a.href })));
+                entry.resultCountCaptured = items.length;
+                entry.top40 = items;
+                const hit = items.find(item => {
+                  try { return matches(new URL(item.url).hostname, domain); } catch { return false; }
+                });
+                if (hit) {
+                  entry.hit = hit;
+                  report.checks.push(entry);
+                  report.found = { domain, query, ...hit };
+                  break;
+                }
+              } catch (e) {
+                entry.error = String(e && e.message || e);
+              }
+              report.checks.push(entry);
+              await page.waitForTimeout(1800);
+            }
+
+            await browser.close();
+            fs.writeFileSync('bing-rank-result.json', JSON.stringify(report, null, 2));
+            console.log(JSON.stringify({ found: report.found, checked: report.checks.map(x => ({domain:x.domain, query:x.query, status:x.status, count:x.resultCountCaptured, hit:x.hit||null, finalUrl:x.finalUrl})) }, null, 2));
+          })().catch(err => { console.error(err); process.exit(1); });
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-rank-result
+          path: bing-rank-result.json
+          retention-days: 1
