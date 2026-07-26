@@ -1,6 +1,11 @@
 name: Scheduled browser monitor
 
 on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/browser-monitor.yml
   schedule:
     - cron: "7,22,38,53 * * * *"
       timezone: "Europe/London"
@@ -24,7 +29,61 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  bing_test:
+    if: github.event_name == 'push'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install Chromium
+        run: npx playwright install --with-deps chromium
+
+      - name: Test Bing navigation
+        run: |
+          node --input-type=module <<'NODE'
+          import { chromium } from 'playwright';
+          const browser = await chromium.launch({ headless: true });
+          const page = await browser.newPage();
+          const started = Date.now();
+          try {
+            const response = await page.goto('https://www.bing.com/', {
+              waitUntil: 'domcontentloaded',
+              timeout: 45000,
+            });
+            console.log(JSON.stringify({
+              ok: true,
+              status: response?.status() ?? null,
+              finalUrl: page.url(),
+              title: await page.title(),
+              durationMs: Date.now() - started,
+            }));
+          } catch (error) {
+            console.error(JSON.stringify({
+              ok: false,
+              error: error instanceof Error ? error.message : String(error),
+              finalUrl: page.url(),
+              durationMs: Date.now() - started,
+            }));
+            process.exitCode = 1;
+          } finally {
+            await browser.close();
+          }
+          NODE
+
   monitor:
+    if: github.event_name != 'push'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     env:
