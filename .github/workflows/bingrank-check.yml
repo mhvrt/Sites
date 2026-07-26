@@ -1,0 +1,80 @@
+name: BingRank checker validation
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Check candidate rankings via BingRank
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const {chromium}=require('playwright');
+          const checks=[
+            ['buildsquad.net','best dogecoin wallets'],
+            ['spectachain.io','is xrp a stablecoin'],
+            ['uniquebinars.io','Maschinenring mining'],
+            ['gemstock.tech','Blockchair'],
+            ['subsocket.io','DGB hashrate chart'],
+            ['angrymonky.com','Kryptex']
+          ];
+          (async()=>{
+            const browser=await chromium.launch({headless:true});
+            const context=await browser.newContext({locale:'en-US'});
+            const report={checkedAt:new Date().toISOString(),checks:[]};
+            for(const [domain,query] of checks){
+              const page=await context.newPage();
+              const net=[];
+              page.on('response',async r=>{
+                const u=r.url(); if(/rank|check|api|search|bing/i.test(u)){
+                  let b='';try{const ct=r.headers()['content-type']||'';if(/json|text|html/i.test(ct))b=(await r.text()).slice(0,30000)}catch{}
+                  net.push({url:u,status:r.status(),contentType:r.headers()['content-type']||'',body:b});
+                }
+              });
+              const entry={domain,query};
+              try{
+                const res=await page.goto('https://bingrank.com/',{waitUntil:'domcontentloaded',timeout:30000});
+                entry.homeStatus=res?res.status():null;
+                await page.waitForTimeout(700);
+                entry.inputs=await page.locator('input').evaluateAll(es=>es.map((e,i)=>({i,type:e.type,name:e.name,id:e.id,placeholder:e.placeholder,value:e.value})));
+                entry.buttons=await page.locator('button').evaluateAll(es=>es.map((e,i)=>({i,text:(e.innerText||e.textContent||'').trim(),type:e.type,id:e.id})));
+                const texts=page.locator('input[type="text"],input:not([type])');
+                const n=await texts.count();
+                if(n<2) throw new Error('Expected at least two text inputs, found '+n);
+                await texts.nth(0).fill(domain);
+                await texts.nth(1).fill(query);
+                let btn=page.getByRole('button',{name:/check rank/i}).first();
+                if(!(await btn.count())) btn=page.locator('button[type="submit"]').first();
+                await btn.click();
+                await page.waitForTimeout(7000);
+                entry.finalUrl=page.url();
+                entry.body=(await page.locator('body').innerText()).slice(0,25000);
+                entry.domainMention=entry.body.toLowerCase().includes(domain.toLowerCase());
+                entry.rankLines=entry.body.split(/\n+/).map(s=>s.trim()).filter(s=>/rank|position|not found|not ranking|top\s*\d+/i.test(s)).slice(0,80);
+                entry.links=await page.locator('a[href]').evaluateAll(es=>es.map(a=>({text:(a.innerText||a.textContent||'').trim().slice(0,200),href:a.href})).filter(x=>x.text||x.href).slice(0,150));
+                entry.network=net;
+              }catch(e){entry.error=String(e&&e.message||e);entry.body=(await page.locator('body').innerText().catch(()=>'' )).slice(0,12000);entry.network=net;}
+              report.checks.push(entry);
+              await page.close();
+              if(entry.domainMention && entry.rankLines?.length) break;
+            }
+            fs.writeFileSync('bingrank-result.json',JSON.stringify(report,null,2));
+            console.log(JSON.stringify(report.checks.map(x=>({domain:x.domain,query:x.query,error:x.error,domainMention:x.domainMention,rankLines:x.rankLines,finalUrl:x.finalUrl,bodyPrefix:(x.body||'').slice(0,1500),network:(x.network||[]).map(n=>({url:n.url,status:n.status,bodyPrefix:(n.body||'').slice(0,1000)}))})),null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bingrank-result
+          path: bingrank-result.json
+          retention-days: 1
