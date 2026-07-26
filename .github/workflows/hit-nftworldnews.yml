@@ -1,0 +1,27 @@
+name: HIT nftworldnews nonce crypto
+on:
+  pull_request:
+    branches: [main]
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {page: 1, first: 1}
+          - {page: 2, first: 11}
+          - {page: 3, first: 21}
+          - {page: 4, first: 31}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with: {node-version: '22'}
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps firefox
+      - run: node scripts/tmp-bing-hit-check.mjs
+        env:
+          DOMAIN: nftworldnews.tech
+          QUERY: what is a nonce crypto
+          PAGE_NO: ${{ matrix.page }}
+          FIRST: ${{ matrix.first }}
