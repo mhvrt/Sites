@@ -1,0 +1,192 @@
+name: Bing Firefox US top40 verifier
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      max-parallel: 24
+      matrix:
+        include:
+          - id: buildsquad
+            domain: buildsquad.net
+            query: best dogecoin wallets
+            page: 1
+            first: 1
+          - id: buildsquad
+            domain: buildsquad.net
+            query: best dogecoin wallets
+            page: 2
+            first: 11
+          - id: buildsquad
+            domain: buildsquad.net
+            query: best dogecoin wallets
+            page: 3
+            first: 21
+          - id: buildsquad
+            domain: buildsquad.net
+            query: best dogecoin wallets
+            page: 4
+            first: 31
+          - id: subsocket
+            domain: subsocket.io
+            query: DGB hashrate chart
+            page: 1
+            first: 1
+          - id: subsocket
+            domain: subsocket.io
+            query: DGB hashrate chart
+            page: 2
+            first: 11
+          - id: subsocket
+            domain: subsocket.io
+            query: DGB hashrate chart
+            page: 3
+            first: 21
+          - id: subsocket
+            domain: subsocket.io
+            query: DGB hashrate chart
+            page: 4
+            first: 31
+          - id: gemstock
+            domain: gemstock.tech
+            query: Blockchair
+            page: 1
+            first: 1
+          - id: gemstock
+            domain: gemstock.tech
+            query: Blockchair
+            page: 2
+            first: 11
+          - id: gemstock
+            domain: gemstock.tech
+            query: Blockchair
+            page: 3
+            first: 21
+          - id: gemstock
+            domain: gemstock.tech
+            query: Blockchair
+            page: 4
+            first: 31
+          - id: uniquebinars
+            domain: uniquebinars.io
+            query: Maschinenring mining
+            page: 1
+            first: 1
+          - id: uniquebinars
+            domain: uniquebinars.io
+            query: Maschinenring mining
+            page: 2
+            first: 11
+          - id: uniquebinars
+            domain: uniquebinars.io
+            query: Maschinenring mining
+            page: 3
+            first: 21
+          - id: uniquebinars
+            domain: uniquebinars.io
+            query: Maschinenring mining
+            page: 4
+            first: 31
+          - id: spectachain
+            domain: spectachain.io
+            query: is xrp a stablecoin
+            page: 1
+            first: 1
+          - id: spectachain
+            domain: spectachain.io
+            query: is xrp a stablecoin
+            page: 2
+            first: 11
+          - id: spectachain
+            domain: spectachain.io
+            query: is xrp a stablecoin
+            page: 3
+            first: 21
+          - id: spectachain
+            domain: spectachain.io
+            query: is xrp a stablecoin
+            page: 4
+            first: 31
+          - id: journey
+            domain: journeyofstardust.com
+            query: Solana Price
+            page: 1
+            first: 1
+          - id: journey
+            domain: journeyofstardust.com
+            query: Solana Price
+            page: 2
+            first: 11
+          - id: journey
+            domain: journeyofstardust.com
+            query: Solana Price
+            page: 3
+            first: 21
+          - id: journey
+            domain: journeyofstardust.com
+            query: Solana Price
+            page: 4
+            first: 31
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps firefox
+      - name: Check one Bing US SERP page in Firefox
+        env:
+          CHECK_ID: ${{ matrix.id }}
+          DOMAIN: ${{ matrix.domain }}
+          QUERY: ${{ matrix.query }}
+          PAGE_NO: ${{ matrix.page }}
+          FIRST: ${{ matrix.first }}
+        run: |
+          node <<'NODE'
+          const fs=require('fs');
+          const {firefox}=require('playwright');
+          function decodeBing(href){
+            try{
+              const u=new URL(href).searchParams.get('u');
+              if(u&&u.startsWith('a1')) return Buffer.from(u.slice(2),'base64').toString('utf8');
+            }catch{}
+            return href;
+          }
+          const norm=h=>(h||'').toLowerCase().replace(/^www\./,'');
+          (async()=>{
+            const id=process.env.CHECK_ID,domain=process.env.DOMAIN,query=process.env.QUERY,pageNo=Number(process.env.PAGE_NO),first=Number(process.env.FIRST);
+            const browser=await firefox.launch({headless:true});
+            const context=await browser.newContext({locale:'en-US',timezoneId:'America/New_York'});
+            const page=await context.newPage();
+            const url='https://www.bing.com/search?q='+encodeURIComponent(query)+'&first='+first+'&FORM=PERE&cc=US&setlang=en-US';
+            const out={id,domain,query,page:pageNo,first,requestedUrl:url,checkedAt:new Date().toISOString()};
+            try{
+              const resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:30000});
+              await page.waitForTimeout(1200);
+              out.status=resp?resp.status():null;
+              out.finalUrl=page.url();
+              out.title=await page.title();
+              out.bodyPrefix=(await page.locator('body').innerText()).slice(0,1200);
+              out.challenge=/one last step|solve the challenge|captcha|unusual traffic/i.test(out.bodyPrefix);
+              out.market=await page.evaluate(()=>({region:window._G?.Region||null,mkt:window._G?.Mkt||null,lang:document.documentElement.lang||null})).catch(()=>({region:null,mkt:null,lang:null}));
+              const raw=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a[href]');return a?{title:(a.textContent||'').trim(),href:a.href}:null}).filter(Boolean).slice(0,10));
+              out.results=raw.map((r,i)=>{const target=decodeBing(r.href);let host='';try{host=new URL(target).hostname}catch{}return{rank:(pageNo-1)*10+i+1,positionWithinPage:i+1,title:r.title,url:target,host}});
+              out.count=out.results.length;
+              out.hit=out.results.find(r=>{const h=norm(r.host),d=norm(domain);return h===d||h.endsWith('.'+d)})||null;
+            }catch(e){out.error=String(e&&e.message||e);}
+            fs.writeFileSync(`bing-firefox-${id}-${pageNo}.json`,JSON.stringify(out,null,2));
+            console.log(JSON.stringify({id,domain,query,page:pageNo,status:out.status,challenge:out.challenge,market:out.market,count:out.count,hit:out.hit,hosts:(out.results||[]).map(r=>r.host),error:out.error},null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exit(1)});
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-firefox-${{ matrix.id }}-${{ matrix.page }}
+          path: bing-firefox-${{ matrix.id }}-${{ matrix.page }}.json
+          retention-days: 1
