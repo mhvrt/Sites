@@ -1,0 +1,64 @@
+name: Bing geo check
+
+on:
+  pull_request:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium
+      - name: Inspect Bing geo and market
+        run: |
+          node --input-type=module <<'NODE'
+          import fs from 'node:fs';
+          import { chromium } from 'playwright';
+
+          const traceText = await fetch('https://www.cloudflare.com/cdn-cgi/trace').then(r => r.text()).catch(() => '');
+          const trace = Object.fromEntries(traceText.trim().split('\n').map(line => line.split('=')));
+
+          const browser = await chromium.launch({ headless: true });
+          const context = await browser.newContext({ locale: 'en-US' });
+          const page = await context.newPage();
+          const result = { trace };
+          try {
+            const response = await page.goto('https://www.bing.com/search?q=weather', { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page.waitForTimeout(1800);
+            result.status = response?.status() ?? null;
+            result.finalUrl = page.url();
+            result.title = await page.title();
+            result.htmlLang = await page.locator('html').getAttribute('lang');
+            result.navigatorLanguage = await page.evaluate(() => navigator.language);
+            result.timeZone = await page.evaluate(() => Intl.DateTimeFormat().resolvedOptions().timeZone);
+            result.bingGlobals = await page.evaluate(() => {
+              const g = globalThis._G || {};
+              const keys = ['Region','Lang','Mkt','Market','Locale','Loc','IG','EventID'];
+              return Object.fromEntries(keys.filter(k => g[k] != null).map(k => [k, g[k]]));
+            });
+            result.cookies = (await context.cookies('https://www.bing.com')).map(c => ({ name: c.name, value: c.value })).filter(c => /SRCH|MUID|ANON|_SS/i.test(c.name));
+            result.bodyPrefix = (await page.locator('body').innerText().catch(() => '')).slice(0, 1800);
+            result.topTitles = await page.locator('li.b_algo h2').allInnerTexts().catch(() => []);
+          } catch (e) {
+            result.error = e instanceof Error ? e.message : String(e);
+            result.finalUrl = page.url();
+          } finally {
+            await browser.close();
+          }
+          fs.writeFileSync('bing-geo-result.json', JSON.stringify(result, null, 2));
+          console.log(JSON.stringify(result, null, 2));
+          NODE
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-geo-result
+          path: bing-geo-result.json
+          retention-days: 1
