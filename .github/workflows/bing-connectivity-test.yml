@@ -6,6 +6,9 @@ on:
       - main
     paths:
       - .github/workflows/bing-connectivity-test.yml
+  pull_request:
+    branches:
+      - main
 
 permissions:
   contents: read
