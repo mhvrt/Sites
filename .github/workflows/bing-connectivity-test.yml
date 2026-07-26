@@ -32,7 +32,7 @@ jobs:
       - name: Install Chromium
         run: npx playwright install --with-deps chromium
 
-      - name: Open Bing with Playwright
+      - name: Open and validate Bing with Playwright
         run: |
           node --input-type=module <<'NODE'
           import { chromium } from 'playwright';
@@ -44,20 +44,26 @@ jobs:
               waitUntil: 'domcontentloaded',
               timeout: 45000,
             });
-            console.log('BING_RESULT=' + JSON.stringify({
-              ok: true,
-              status: response?.status() ?? null,
-              finalUrl: page.url(),
-              title: await page.title(),
+            const status = response?.status() ?? 0;
+            const finalUrl = page.url();
+            const title = await page.title();
+            const hostname = new URL(finalUrl).hostname;
+            const searchInputs = await page.locator('input[name="q"], textarea[name="q"]').count();
+            const result = {
+              status,
+              finalUrl,
+              title,
+              hostname,
+              searchInputs,
               durationMs: Date.now() - started,
-            }));
+            };
+            console.log('BING_RESULT=' + JSON.stringify(result));
+            if (status >= 400) throw new Error(`bing_http_${status}`);
+            if (!(hostname === 'bing.com' || hostname.endsWith('.bing.com'))) throw new Error(`unexpected_host_${hostname}`);
+            if (!/bing/i.test(title)) throw new Error(`unexpected_title_${title}`);
+            if (searchInputs < 1) throw new Error('bing_search_input_missing');
           } catch (error) {
-            console.error('BING_RESULT=' + JSON.stringify({
-              ok: false,
-              error: error instanceof Error ? error.message : String(error),
-              finalUrl: page.url(),
-              durationMs: Date.now() - started,
-            }));
+            console.error('BING_ERROR=' + (error instanceof Error ? error.message : String(error)));
             process.exitCode = 1;
           } finally {
             await browser.close();
