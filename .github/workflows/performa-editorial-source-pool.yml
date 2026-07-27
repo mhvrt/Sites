@@ -1,0 +1,87 @@
+name: Performa editorial source pool
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+    inputs:
+      source_url:
+        description: "Optional single source URL; leave empty to run the whole pool"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+jobs:
+  referral-pool:
+    concurrency:
+      group: performa-editorial-source-pool
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 50
+    env:
+      PERFORMA_ORIGIN: "https://performa.com"
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Validate referral runner
+        run: node --check scripts/run-performa-editorial-referral.mjs
+
+      - name: Run editorial source pool
+        shell: bash
+        env:
+          MANUAL_SOURCE_URL: ${{ inputs.source_url }}
+        run: |
+          set +e
+
+          successes=0
+          failures=0
+
+          if [ -n "$MANUAL_SOURCE_URL" ]; then
+            printf '%s\n' "$MANUAL_SOURCE_URL" > /tmp/performa-editorial-sources.txt
+          else
+            shuf config/performa-editorial-sources.txt > /tmp/performa-editorial-sources.txt
+          fi
+
+          while IFS= read -r source_url || [ -n "$source_url" ]; do
+            [ -z "$source_url" ] && continue
+
+            echo "::group::Referral source: $source_url"
+            REFERRAL_SOURCE_URL="$source_url" xvfb-run -a node scripts/run-performa-editorial-referral.mjs
+            status=$?
+            echo "::endgroup::"
+
+            if [ "$status" -eq 0 ]; then
+              successes=$((successes + 1))
+            else
+              failures=$((failures + 1))
+              echo "Referral journey failed for: $source_url"
+            fi
+
+            sleep $((5 + RANDOM % 16))
+          done < /tmp/performa-editorial-sources.txt
+
+          echo "Referral pool complete: successes=$successes failures=$failures"
+
+          if [ "$successes" -eq 0 ]; then
+            echo "No referral journey succeeded in this run."
+            exit 1
+          fi
+
+          exit 0
