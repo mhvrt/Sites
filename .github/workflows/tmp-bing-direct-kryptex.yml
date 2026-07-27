@@ -1,0 +1,87 @@
+name: Temporary Bing direct Kryptex top50
+
+on:
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        first: [1, 11, 21, 31, 41]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          npm ci
+          npx playwright install --with-deps firefox
+      - name: Check Bing US page
+        env:
+          FIRST: ${{ matrix.first }}
+        run: |
+          node <<'NODE'
+          const { firefox } = require('playwright');
+          const https = require('https');
+
+          const target = 'https://emcd.io/articles/mining/how-to-start-mining-with-kryptex-download-and-install/'.replace(/\/$/, '').toLowerCase();
+          const first = Number(process.env.FIRST);
+          const pageNo = first === 1 ? 1 : Math.floor(first / 10) + 1;
+          const query = 'kryptex';
+
+          function get(url) {
+            return new Promise((resolve) => {
+              https.get(url, {headers:{'User-Agent':'Mozilla/5.0'}}, (res) => {
+                let data=''; res.on('data', d => data += d); res.on('end', () => resolve({status:res.statusCode, data}));
+              }).on('error', e => resolve({status:0, data:String(e)}));
+            });
+          }
+
+          (async () => {
+            const ip = await get('https://ipinfo.io/json');
+            console.log('RUNNER_IPINFO', ip.status, ip.data.slice(0, 1000));
+
+            const browser = await firefox.launch({ headless: true });
+            const context = await browser.newContext({
+              locale: 'en-US',
+              timezoneId: 'America/New_York',
+              userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0'
+            });
+            const page = await context.newPage();
+            const url = `https://www.bing.com/search?q=${encodeURIComponent(query)}&cc=US&setlang=en-US&first=${first}&FORM=PERE`;
+            const resp = await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 45000 });
+            await page.waitForTimeout(2500);
+            const finalUrl = page.url();
+            const title = await page.title();
+            const text = (await page.locator('body').innerText().catch(()=>'')) || '';
+            console.log('PAGE', pageNo, 'FIRST', first, 'STATUS', resp && resp.status(), 'FINAL_URL', finalUrl, 'TITLE', title);
+            const blocked = /captcha|verify you are human|unusual traffic|challenge/i.test(text + ' ' + finalUrl);
+            console.log('BLOCKED', blocked);
+
+            const market = await page.evaluate(() => ({
+              lang: document.documentElement.lang,
+              region: globalThis._G?.Region,
+              mkt: globalThis._G?.Mkt,
+              setLang: globalThis._G?.Lang
+            })).catch(()=>({}));
+            console.log('MARKET', JSON.stringify(market));
+
+            const results = await page.locator('li.b_algo').evaluateAll((lis) => lis.map(li => {
+              const a = li.querySelector('h2 a');
+              return a ? {href:a.href, title:(a.textContent||'').trim()} : null;
+            }).filter(Boolean)).catch(()=>[]);
+            console.log('ORGANIC_COUNT', results.length);
+            results.forEach((r, i) => console.log(`RANK ${first + i}: ${r.href} | ${r.title}`));
+
+            const hitIndex = results.findIndex(r => {
+              const h = (r.href || '').replace(/\/$/, '').toLowerCase();
+              return h === target || h.includes(target);
+            });
+            if (hitIndex >= 0) console.log('CONFIRMED_HIT', first + hitIndex, results[hitIndex].href);
+            else console.log(blocked || results.length === 0 ? 'INVALID_PAGE_NO_CONCLUSION' : `VALID_PAGE_NO_HIT ranks=${first}-${first+results.length-1}`);
+            await browser.close();
+          })().catch(e => { console.error(e); process.exitCode = 2; });
+          NODE
