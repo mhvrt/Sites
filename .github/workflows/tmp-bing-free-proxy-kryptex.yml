@@ -8,106 +8,68 @@ on:
 jobs:
   check:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 12
     steps:
-      - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: python -m pip install requests beautifulsoup4
-
+      - uses: actions/checkout@v4
+      - run: python -m pip install requests beautifulsoup4
       - name: Check Bing US through free US proxies
         shell: python
         run: |
-          import requests, re, time, html
+          import requests
           from bs4 import BeautifulSoup
-          from urllib.parse import quote, urlparse
+          from urllib.parse import quote
 
-          target = 'https://emcd.io/articles/mining/how-to-start-mining-with-kryptex-download-and-install/'
-          target_norm = target.rstrip('/').lower()
-          query = 'kryptex'
-
-          # Public US HTTP proxies from ProxyScrape. No credentials are used.
-          api = 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=http&country=us&ssl=yes&timeout=5000'
-          r = requests.get(api, timeout=20)
-          r.raise_for_status()
-          proxies = [x.strip() for x in r.text.splitlines() if ':' in x][:80]
-          print('Loaded proxies:', len(proxies))
-
-          def challenge(text, final_url):
-              t = (text or '').lower()
-              u = (final_url or '').lower()
-              markers = ['captcha', 'verify you are human', 'unusual traffic', 'challenge', 'sorry']
-              return any(m in t for m in markers) or 'challenge' in u
-
-          good = 0
-          checked_pages = set()
+          target = 'https://emcd.io/articles/mining/how-to-start-mining-with-kryptex-download-and-install/'.rstrip('/').lower()
           ua = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/138.0.0.0 Safari/537.36'
+          api = 'https://api.proxyscrape.com/v4/free-proxy-list/get?request=displayproxies&protocol=http&country=us&ssl=yes&timeout=3000'
+          proxies = [x.strip() for x in requests.get(api, timeout=20).text.splitlines() if ':' in x][:50]
+          print('PROXIES_LOADED', len(proxies))
 
+          def blocked(text, url):
+              z=((text or '')+' '+(url or '')).lower()
+              return any(x in z for x in ['captcha','verify you are human','unusual traffic','challenge'])
+
+          live_us=0
+          bing_valid=0
           for proxy in proxies:
-              purl = 'http://' + proxy
-              px = {'http': purl, 'https': purl}
+              px={'http':'http://'+proxy,'https':'http://'+proxy}
               try:
-                  # Validate the proxy and that it is US.
-                  ipr = requests.get('https://ipinfo.io/json', proxies=px, timeout=8, headers={'User-Agent': ua})
-                  if ipr.status_code != 200:
-                      continue
-                  info = ipr.json()
-                  if info.get('country') != 'US':
-                      continue
-
-                  print('\nPROXY', proxy, 'IP', info.get('ip'), 'region', info.get('region'), 'city', info.get('city'))
-                  good += 1
-
-                  # A single working proxy is used for all five result pages, preserving one session/IP.
-                  sess = requests.Session()
-                  sess.proxies.update(px)
-                  sess.headers.update({'User-Agent': ua, 'Accept-Language': 'en-US,en;q=0.9'})
-
-                  valid_this_proxy = True
-                  for page, first in enumerate([1, 11, 21, 31, 41], start=1):
-                      url = f'https://www.bing.com/search?q={quote(query)}&cc=US&setlang=en-US&first={first}&FORM=PERE'
-                      sr = sess.get(url, timeout=12, allow_redirects=True)
-                      print('PAGE', page, 'status', sr.status_code, 'url', sr.url, 'bytes', len(sr.text))
-                      if sr.status_code != 200 or challenge(sr.text, sr.url):
-                          print('PAGE', page, 'BLOCKED_OR_INVALID')
-                          valid_this_proxy = False
-                          break
-
-                      soup = BeautifulSoup(sr.text, 'html.parser')
-                      organic = []
+                  info=requests.get('https://ipinfo.io/json', proxies=px, timeout=5, headers={'User-Agent':ua})
+                  if info.status_code!=200: continue
+                  j=info.json()
+                  if j.get('country')!='US': continue
+                  live_us+=1
+                  s=requests.Session(); s.proxies.update(px); s.headers.update({'User-Agent':ua,'Accept-Language':'en-US,en;q=0.9'})
+                  page_results=[]
+                  ok=True
+                  for page,first in enumerate([1,11,21,31,41],1):
+                      url=f'https://www.bing.com/search?q={quote("kryptex")}&cc=US&setlang=en-US&first={first}&FORM=PERE'
+                      r=s.get(url,timeout=8,allow_redirects=True)
+                      if r.status_code!=200 or blocked(r.text,r.url): ok=False; break
+                      soup=BeautifulSoup(r.text,'html.parser')
+                      organic=[]
                       for li in soup.select('li.b_algo'):
-                          a = li.select_one('h2 a') or li.select_one('a')
-                          if not a or not a.get('href'):
-                              continue
-                          href = a.get('href').strip()
-                          title = a.get_text(' ', strip=True)
-                          organic.append((href, title))
-
-                      if not organic:
-                          print('PAGE', page, 'NO_ORGANIC_RESULTS')
-                          valid_this_proxy = False
-                          break
-
-                      print('ORGANIC_COUNT', len(organic))
-                      for i, (href, title) in enumerate(organic, start=first):
-                          hnorm = href.rstrip('/').lower()
-                          print(f'RANK {i}: {href} | {title[:100]}')
-                          if target_norm == hnorm or target_norm in hnorm:
-                              print(f'CONFIRMED_HIT rank={i} page={page} proxy={proxy} ip={info.get("ip")}')
+                          a=li.select_one('h2 a')
+                          if a and a.get('href'): organic.append(a.get('href').strip())
+                      if not organic: ok=False; break
+                      page_results.append(organic)
+                  if not ok: continue
+                  bing_valid+=1
+                  print('VALID_US_PROXY', j.get('ip'), j.get('region'), j.get('city'))
+                  rank=0
+                  for pidx,organic in enumerate(page_results):
+                      base=[1,11,21,31,41][pidx]
+                      for off,href in enumerate(organic):
+                          if target == href.rstrip('/').lower() or target in href.rstrip('/').lower():
+                              rank=base+off
+                              print('RESULT CONFIRMED_HIT', rank, href)
                               raise SystemExit(42)
-                      checked_pages.add(page)
-
-                  if valid_this_proxy and len(checked_pages) == 5:
-                      print('CONFIRMED_NO_HIT_TOP50_WITH_VALID_US_PROXY', proxy, info.get('ip'))
-                      raise SystemExit(0)
-
-                  if good >= 12:
-                      break
+                  print('RESULT CONFIRMED_NO_HIT_TOP50')
+                  raise SystemExit(0)
               except SystemExit:
                   raise
-              except Exception as e:
-                  print('proxy failed', proxy, type(e).__name__, str(e)[:180])
+              except Exception:
+                  continue
 
-          print('NO_COMPLETE_VALID_PROXY_RUN; good_us_proxies=', good, 'pages_seen=', sorted(checked_pages))
+          print('RESULT NO_COMPLETE_VALID_PROXY_RUN live_us=',live_us,'bing_valid=',bing_valid)
           raise SystemExit(3)
