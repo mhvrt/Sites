@@ -1,0 +1,71 @@
+name: Performa editorial referral QA
+
+on:
+  schedule:
+    - cron: "1,11,21,31,41,51 * * * *"
+    - cron: "3,13,23,33,43,53 * * * *"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Editorial source to test"
+        required: true
+        default: "thestreet"
+        type: choice
+        options:
+          - thestreet
+          - bbntimes
+
+permissions:
+  contents: read
+
+jobs:
+  referral-qa:
+    concurrency:
+      group: performa-editorial-referral-${{ github.event.schedule || inputs.source || 'manual' }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      PERFORMA_ORIGIN: "https://performa.com"
+
+    steps:
+      - name: Select editorial source
+        shell: bash
+        run: |
+          case "${{ github.event.schedule }}:${{ inputs.source }}" in
+            "3,13,23,33,43,53 * * * *:"|":bbntimes")
+              echo "REFERRAL_SOURCE_URL=https://www.bbntimes.com/financial/five-financial-bottlenecks-slowing-down-international-growth" >> "$GITHUB_ENV"
+              ;;
+            *)
+              echo "REFERRAL_SOURCE_URL=https://www.thestreet.com/crypto/newsroom/how-stablecoins-and-fintech-platforms-are-reshaping-business-payments" >> "$GITHUB_ENV"
+              ;;
+          esac
+
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        run: npm install --ignore-scripts --no-audit --no-fund
+
+      - name: Install Playwright browser
+        run: npx playwright install --with-deps chromium
+
+      - name: Validate referral runner
+        run: node --check scripts/run-performa-editorial-referral.mjs
+
+      - name: Random second jitter
+        shell: bash
+        run: |
+          delay=$((RANDOM % 45))
+          echo "Random referral QA delay: ${delay}s"
+          sleep "$delay"
+
+      - name: Run editorial referral journey
+        run: xvfb-run -a node scripts/run-performa-editorial-referral.mjs
