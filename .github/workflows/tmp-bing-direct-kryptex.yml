@@ -23,7 +23,7 @@ jobs:
         env:
           FIRST: ${{ matrix.first }}
         run: |
-          node <<'NODE'
+          node <<'NODE' | tee "result-${FIRST}.txt"
           const { firefox } = require('playwright');
           const https = require('https');
 
@@ -85,3 +85,10 @@ jobs:
             await browser.close();
           })().catch(e => { console.error(e); process.exitCode = 2; });
           NODE
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bing-direct-${{ matrix.first }}
+          path: result-${{ matrix.first }}.txt
+          if-no-files-found: ignore
