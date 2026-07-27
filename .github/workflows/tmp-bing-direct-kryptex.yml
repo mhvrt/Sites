@@ -15,9 +15,9 @@ jobs:
         first: [1, 11, 21, 31, 41]
     steps:
       - uses: actions/checkout@v4
-      - name: Install dependencies
+      - name: Install Playwright Firefox
         run: |
-          npm ci
+          npm install --no-save playwright@1.58.2
           npx playwright install --with-deps firefox
       - name: Check Bing US page
         env:
