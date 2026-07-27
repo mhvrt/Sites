@@ -1,0 +1,58 @@
+name: Temporary Bing Kryptex pages 4 and 6
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        first: [31, 51]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Playwright Firefox
+        run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps firefox
+      - name: Check Bing US page
+        env:
+          FIRST: ${{ matrix.first }}
+        run: |
+          node <<'NODE'
+          const { firefox } = require('playwright');
+          const fs = require('fs');
+          const target = 'https://emcd.io/articles/mining/how-to-start-mining-with-kryptex-download-and-install/'.replace(/\/$/, '').toLowerCase();
+          const first = Number(process.env.FIRST);
+          const pageNo = first === 31 ? 4 : 6;
+          (async () => {
+            const browser = await firefox.launch({headless:true});
+            const context = await browser.newContext({locale:'en-US', timezoneId:'America/New_York'});
+            const page = await context.newPage();
+            const url = `https://www.bing.com/search?q=kryptex&cc=US&setlang=en-US&first=${first}&FORM=PERE`;
+            const resp = await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});
+            await page.waitForTimeout(2500);
+            const text = await page.locator('body').innerText().catch(()=> '');
+            const finalUrl = page.url();
+            const blocked = /captcha|verify you are human|unusual traffic|challenge/i.test(text+' '+finalUrl);
+            const market = await page.evaluate(() => ({lang:document.documentElement.lang,region:globalThis._G?.Region,mkt:globalThis._G?.Mkt})).catch(()=>({}));
+            const results = await page.locator('li.b_algo').evaluateAll(lis => lis.map(li => { const a=li.querySelector('h2 a'); return a?{href:a.href,title:(a.textContent||'').trim()}:null; }).filter(Boolean)).catch(()=>[]);
+            let out = `PAGE ${pageNo}\nSTATUS ${resp&&resp.status()}\nFINAL_URL ${finalUrl}\nBLOCKED ${blocked}\nMARKET ${JSON.stringify(market)}\nORGANIC_COUNT ${results.length}\n`;
+            results.forEach((r,i)=> out += `RANK ${first+i}: ${r.href} | ${r.title}\n`);
+            const hitIndex = results.findIndex(r => { const h=(r.href||'').replace(/\/$/,'').toLowerCase(); return h===target || h.includes(target); });
+            if (hitIndex>=0) out += `CONFIRMED_HIT ${first+hitIndex} ${results[hitIndex].href}\n`;
+            else out += (blocked||results.length===0 ? 'INVALID_PAGE_NO_CONCLUSION\n' : `VALID_PAGE_NO_HIT ranks=${first}-${first+results.length-1}\n`);
+            console.log(out);
+            fs.writeFileSync(`bing-${first}.txt`,out);
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exitCode=2});
+          NODE
+      - name: Upload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: bing-${{ matrix.first }}
+          path: bing-${{ matrix.first }}.txt
