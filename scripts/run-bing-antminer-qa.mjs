@@ -1,7 +1,7 @@
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { firefox } from 'playwright';
+import { chromium, firefox } from 'playwright';
 
 const REPORT_PATH = process.env.REPORT_PATH || path.join(os.tmpdir(), 'bing-antminer-qa.json');
 const QUERY = 'antminer s9';
@@ -10,6 +10,7 @@ const TARGET_PATH = '/articles/mining/mining-with-antminer-s9-asic-is-it-still-p
 const TARGET_URL = `https://${TARGET_HOST}${TARGET_PATH}`;
 const EXPECTED_TITLE = 'Mining with Antminer S9 ASIC: Is It Still Profitable?';
 const MAX_SERP_PAGES = 5;
+const MAX_ATTEMPTS = Math.max(1, Math.min(4, Number(process.env.BING_MAX_ATTEMPTS || 3)));
 
 const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
 const cleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
@@ -35,7 +36,7 @@ function titleMatches(value) {
 
 function decodeBingUrl(href) {
   try {
-    const u = new URL(href);
+    const u = new URL(href, 'https://www.bing.com');
     const encoded = u.searchParams.get('u') || '';
     if (!encoded.startsWith('a1')) return href;
     let raw = encoded.slice(2);
@@ -64,10 +65,31 @@ function isTargetUrl(value) {
   }
 }
 
-async function naturalBingPause(page, targetLink) {
-  const started = Date.now();
-  await page.waitForTimeout(randomBetween(2400, 4800));
+function hasBingChallenge(bodyText) {
+  return /one last step|solve the challenge|verify you are human|unusual traffic/i.test(bodyText || '');
+}
 
+async function installAnalyticsBlock(context) {
+  await context.route('**/*', async (route) => {
+    try {
+      const host = new URL(route.request().url()).hostname.toLowerCase();
+      if (
+        host.endsWith('google-analytics.com') ||
+        host.endsWith('googletagmanager.com') ||
+        host.endsWith('doubleclick.net') ||
+        host.endsWith('clarity.ms') ||
+        host.endsWith('hotjar.com') ||
+        host.endsWith('hotjar.io')
+      ) {
+        return route.abort('blockedbyclient');
+      }
+    } catch {}
+    return route.continue();
+  });
+}
+
+async function naturalBingMovement(page) {
+  await page.waitForTimeout(randomBetween(1800, 3600));
   const viewport = page.viewportSize() || { width: 1440, height: 900 };
   await page.mouse.move(
     randomBetween(120, Math.max(121, viewport.width - 120)),
@@ -78,13 +100,17 @@ async function naturalBingPause(page, targetLink) {
   const scrollHeight = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)).catch(() => 0);
   if (scrollHeight > viewport.height + 250) {
     await page.mouse.wheel(0, randomBetween(180, 520)).catch(() => undefined);
-    await page.waitForTimeout(randomBetween(900, 2200));
-    if (Math.random() < 0.35) {
+    await page.waitForTimeout(randomBetween(700, 1700));
+    if (Math.random() < 0.3) {
       await page.mouse.wheel(0, -randomBetween(80, 220)).catch(() => undefined);
-      await page.waitForTimeout(randomBetween(600, 1400));
+      await page.waitForTimeout(randomBetween(500, 1200));
     }
   }
+}
 
+async function naturalBingPause(page, targetLink) {
+  const started = Date.now();
+  await naturalBingMovement(page);
   await targetLink.scrollIntoViewIfNeeded();
   await targetLink.hover({ timeout: 5000 }).catch(() => undefined);
   await page.waitForTimeout(randomBetween(2200, 5200));
@@ -187,15 +213,83 @@ async function browseEmcd(page, report) {
   report.finalUrl = page.url();
 }
 
-let browser;
+async function inspectSerpPage(page, attempt, serpPage) {
+  await page.waitForTimeout(randomBetween(1400, 2800));
+  const bodyText = await page.locator('body').innerText().catch(() => '');
+  const challenge = hasBingChallenge(bodyText);
+  const results = page.locator('li.b_algo h2 a');
+  const count = Math.min(await results.count(), 20);
+
+  attempt.pages.push({
+    page: serpPage,
+    url: page.url(),
+    resultCount: count,
+    challenge,
+  });
+
+  if (challenge) return { challenge: true, found: null, resultCount: count };
+
+  for (let i = 0; i < count; i += 1) {
+    const link = results.nth(i);
+    const title = cleanText(await link.innerText().catch(() => ''));
+    const href = (await link.getAttribute('href')) || '';
+    const decoded = decodeBingUrl(href);
+
+    if (isTargetUrl(decoded) && titleMatches(title)) {
+      return {
+        challenge: false,
+        resultCount: count,
+        found: {
+          link,
+          title,
+          decoded,
+          rawHref: href,
+          serpPage,
+          rankOnPage: i + 1,
+          absoluteRank: (serpPage - 1) * 10 + i + 1,
+        },
+      };
+    }
+  }
+
+  return { challenge: false, found: null, resultCount: count };
+}
+
+async function clickNextBingPage(page) {
+  await naturalBingMovement(page);
+  const next = page.locator('a.sb_pagN, a[title="Next page"], a[aria-label="Next page"]').first();
+  if (!(await next.isVisible().catch(() => false))) return false;
+
+  await next.scrollIntoViewIfNeeded().catch(() => undefined);
+  await next.hover({ timeout: 3000 }).catch(() => undefined);
+  await page.waitForTimeout(randomBetween(700, 1600));
+
+  const before = page.url();
+  const nav = page.waitForURL(
+    (u) => u.toString() !== before,
+    { timeout: 30000, waitUntil: 'domcontentloaded' },
+  ).catch(() => null);
+
+  try {
+    await next.click({ timeout: 10000 });
+  } catch {
+    return false;
+  }
+
+  return Boolean(await nav);
+}
+
 const report = {
   synthetic: true,
   query: QUERY,
   expectedTitle: EXPECTED_TITLE,
   targetUrl: TARGET_URL,
   clicked: false,
+  attempts: [],
+  successfulAttempt: null,
   matchedTitle: null,
   matchedUrl: null,
+  rawBingHref: null,
   bingRegion: null,
   bingMarket: null,
   bingPreClickMs: null,
@@ -210,47 +304,43 @@ const report = {
   error: null,
 };
 
-try {
-  browser = await firefox.launch({ headless: true });
-  const context = await browser.newContext({
-    locale: 'en-US',
-    viewport: { width: 1440, height: 900 },
-  });
+const attemptPlan = [
+  { name: 'chromium', launcher: chromium },
+  { name: 'firefox', launcher: firefox },
+  { name: 'chromium', launcher: chromium },
+  { name: 'firefox', launcher: firefox },
+].slice(0, MAX_ATTEMPTS);
 
-  // Keep this synthetic monitor out of destination analytics while preserving the real Bing navigation.
-  await context.route('**/*', async (route) => {
-    try {
-      const host = new URL(route.request().url()).hostname.toLowerCase();
-      if (
-        host.endsWith('google-analytics.com') ||
-        host.endsWith('googletagmanager.com') ||
-        host.endsWith('doubleclick.net') ||
-        host.endsWith('clarity.ms') ||
-        host.endsWith('hotjar.com') ||
-        host.endsWith('hotjar.io')
-      ) {
-        return route.abort('blockedbyclient');
-      }
-    } catch {}
-    return route.continue();
-  });
+for (let attemptIndex = 0; attemptIndex < attemptPlan.length && !report.clicked; attemptIndex += 1) {
+  const { name, launcher } = attemptPlan[attemptIndex];
+  const attempt = {
+    number: attemptIndex + 1,
+    browser: name,
+    pages: [],
+    status: 'started',
+    error: null,
+  };
+  report.attempts.push(attempt);
 
-  const page = await context.newPage();
-  let found = null;
+  let browser;
+  try {
+    browser = await launcher.launch({ headless: true });
+    const context = await browser.newContext({
+      locale: 'en-US',
+      viewport: { width: 1440, height: 900 },
+    });
+    await installAnalyticsBlock(context);
 
-  for (let serpPage = 1; serpPage <= MAX_SERP_PAGES && !found; serpPage += 1) {
+    const page = await context.newPage();
     const searchUrl = new URL('https://www.bing.com/search');
     searchUrl.searchParams.set('q', QUERY);
     searchUrl.searchParams.set('cc', 'US');
     searchUrl.searchParams.set('setlang', 'en-US');
     searchUrl.searchParams.set('count', '10');
-    if (serpPage > 1) searchUrl.searchParams.set('first', String((serpPage - 1) * 10 + 1));
 
     await page.goto(searchUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForTimeout(randomBetween(1400, 3000));
-    report.serpPagesChecked = serpPage;
 
-    if (serpPage === 1) {
+    if (attemptIndex === 0) {
       const globals = await page.evaluate(() => ({
         region: globalThis?._G?.Region || null,
         market: globalThis?._G?.Mkt || null,
@@ -259,56 +349,83 @@ try {
       report.bingMarket = globals.market;
     }
 
-    const results = page.locator('li.b_algo h2 a');
-    const count = Math.min(await results.count(), 20);
+    let found = null;
 
-    for (let i = 0; i < count; i += 1) {
-      const link = results.nth(i);
-      const title = cleanText(await link.innerText().catch(() => ''));
-      const href = (await link.getAttribute('href')) || '';
-      const decoded = decodeBingUrl(href);
+    for (let serpPage = 1; serpPage <= MAX_SERP_PAGES && !found; serpPage += 1) {
+      const inspected = await inspectSerpPage(page, attempt, serpPage);
+      report.serpPagesChecked += 1;
 
-      if (isTargetUrl(decoded) && titleMatches(title)) {
-        found = {
-          link,
-          title,
-          decoded,
-          serpPage,
-          rankOnPage: i + 1,
-          absoluteRank: (serpPage - 1) * 10 + i + 1,
-        };
+      if (inspected.challenge) {
+        attempt.status = `challenge_on_page_${serpPage}`;
         break;
       }
+
+      if (inspected.found) {
+        found = inspected.found;
+        break;
+      }
+
+      if (inspected.resultCount === 0) {
+        attempt.status = `no_results_on_page_${serpPage}`;
+        break;
+      }
+
+      if (serpPage < MAX_SERP_PAGES) {
+        const moved = await clickNextBingPage(page);
+        if (!moved) {
+          attempt.status = `next_failed_on_page_${serpPage}`;
+          break;
+        }
+      }
     }
+
+    if (!found) {
+      if (attempt.status === 'started') attempt.status = 'target_not_found';
+      continue;
+    }
+
+    report.successfulAttempt = attempt.number;
+    report.serpPage = found.serpPage;
+    report.rankOnPage = found.rankOnPage;
+    report.rank = found.absoluteRank;
+    report.matchedTitle = found.title;
+    report.matchedUrl = found.decoded;
+    report.rawBingHref = found.rawHref;
+    report.bingPreClickMs = await naturalBingPause(page, found.link);
+
+    const nav = page.waitForURL(
+      (u) => isTargetUrl(u.toString()),
+      { timeout: 45000, waitUntil: 'domcontentloaded' },
+    ).catch(() => null);
+
+    await found.link.click({ timeout: 15000 });
+    const navigated = await nav;
+    if (!navigated || !isTargetUrl(page.url())) {
+      attempt.status = 'target_click_no_navigation';
+      continue;
+    }
+
+    await page.waitForTimeout(randomBetween(1800, 4200));
+    report.clicked = true;
+    report.referrer = await page.evaluate(() => document.referrer);
+    attempt.status = 'clicked_target';
+
+    await browseEmcd(page, report);
+  } catch (error) {
+    attempt.error = error instanceof Error ? error.message : String(error);
+    attempt.status = 'error';
+  } finally {
+    await browser?.close().catch(() => undefined);
   }
 
-  if (!found) throw new Error(`exact_target_not_found_in_first_${MAX_SERP_PAGES}_bing_pages`);
-
-  report.serpPage = found.serpPage;
-  report.rankOnPage = found.rankOnPage;
-  report.rank = found.absoluteRank;
-  report.matchedTitle = found.title;
-  report.matchedUrl = found.decoded;
-  report.bingPreClickMs = await naturalBingPause(page, found.link);
-
-  const nav = page.waitForURL(
-    (u) => isTargetUrl(u.toString()),
-    { timeout: 45000, waitUntil: 'domcontentloaded' },
-  );
-
-  await found.link.click({ timeout: 15000 });
-  await nav;
-  await page.waitForTimeout(randomBetween(1800, 4200));
-
-  report.clicked = true;
-  report.referrer = await page.evaluate(() => document.referrer);
-
-  await browseEmcd(page, report);
-} catch (error) {
-  report.error = error instanceof Error ? error.message : String(error);
-} finally {
-  await browser?.close().catch(() => undefined);
-  await fs.writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
+  if (!report.clicked && attemptIndex < attemptPlan.length - 1) {
+    await new Promise((resolve) => setTimeout(resolve, randomBetween(3000, 7000)));
+  }
 }
 
+if (!report.clicked) {
+  report.error = 'all_clean_bing_attempts_failed';
+}
+
+await fs.writeFile(REPORT_PATH, `${JSON.stringify(report, null, 2)}\n`);
 if (!report.clicked) process.exitCode = 1;
