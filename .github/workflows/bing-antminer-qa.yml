@@ -33,7 +33,7 @@ jobs:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
           BING_MAX_ATTEMPTS: "3"
           BING_MAX_SERP_PAGES: "5"
-        run: node scripts/run-bing-antminer-referral-v4.mjs
+        run: node scripts/run-bing-antminer-referral-v5.mjs
       - name: Publish summary
         if: always()
         env:
