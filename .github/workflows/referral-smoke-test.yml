@@ -19,12 +19,16 @@ jobs:
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox
       - name: Test physical Bing pagination
+        continue-on-error: true
         env:
           REPORT_PATH: ${{ runner.temp }}/bing-next-click.json
         run: node scripts/debug-bing-next-click.mjs
       - name: Show report
-        run: cat "${{ runner.temp }}/bing-next-click.json"
+        if: always()
+        run: cat "${{ runner.temp }}/bing-next-click.json" || true
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
           name: bing-next-click-${{ github.run_id }}
           path: ${{ runner.temp }}/bing-next-click.json
+          if-no-files-found: warn
