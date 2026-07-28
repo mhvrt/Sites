@@ -1,0 +1,34 @@
+name: Bing production smoke
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  bing-production:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium firefox
+      - name: Run production Bing workflow logic
+        env:
+          REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
+          BING_MAX_ATTEMPTS: "3"
+        run: node scripts/run-bing-antminer-qa.mjs
+      - name: Show report
+        if: always()
+        run: cat "${{ runner.temp }}/bing-antminer-qa.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bing-production-${{ github.run_id }}
+          path: ${{ runner.temp }}/bing-antminer-qa.json
+          if-no-files-found: warn
