@@ -88,6 +88,24 @@ async function installAnalyticsBlock(context) {
   });
 }
 
+async function acceptBingCookies(page) {
+  const selectors = [
+    '#bnp_btn_accept',
+    'button:has-text("Accept")',
+    'button:has-text("Accept all")',
+    'button:has-text("I agree")',
+  ];
+
+  for (const selector of selectors) {
+    const button = page.locator(selector).first();
+    if (await button.isVisible().catch(() => false)) {
+      await button.click({ timeout: 4000 }).catch(() => undefined);
+      await page.waitForTimeout(randomBetween(500, 1200));
+      break;
+    }
+  }
+}
+
 async function naturalBingMovement(page) {
   await page.waitForTimeout(randomBetween(1800, 3600));
   const viewport = page.viewportSize() || { width: 1440, height: 900 };
@@ -106,6 +124,50 @@ async function naturalBingMovement(page) {
       await page.waitForTimeout(randomBetween(500, 1200));
     }
   }
+}
+
+async function openBingSearchFromHomepage(page, attempt) {
+  await page.goto('https://www.bing.com/?cc=US&setlang=en-US', {
+    waitUntil: 'domcontentloaded',
+    timeout: 45000,
+  });
+  await page.waitForTimeout(randomBetween(1800, 3400));
+  await acceptBingCookies(page);
+
+  const homeBody = await page.locator('body').innerText().catch(() => '');
+  if (hasBingChallenge(homeBody)) {
+    attempt.status = 'challenge_on_homepage';
+    return false;
+  }
+
+  const input = page.locator('textarea[name="q"], input[name="q"], input[type="search"], #sb_form_q').first();
+  if (!(await input.isVisible().catch(() => false))) {
+    attempt.status = 'bing_search_input_missing';
+    return false;
+  }
+
+  await naturalBingMovement(page);
+  await input.click({ timeout: 5000 });
+  await page.waitForTimeout(randomBetween(400, 1000));
+  await page.keyboard.type(QUERY, { delay: randomBetween(70, 140) });
+  await page.waitForTimeout(randomBetween(700, 1500));
+
+  const before = page.url();
+  const nav = page.waitForURL(
+    (u) => u.toString() !== before && u.pathname === '/search',
+    { timeout: 30000, waitUntil: 'domcontentloaded' },
+  ).catch(() => null);
+
+  await page.keyboard.press('Enter');
+  const navigated = await nav;
+  if (!navigated) {
+    attempt.status = 'bing_search_submit_failed';
+    return false;
+  }
+
+  await page.waitForTimeout(randomBetween(1200, 2400));
+  attempt.searchMode = 'homepage_keyboard';
+  return true;
 }
 
 async function naturalBingPause(page, targetLink) {
@@ -340,6 +402,7 @@ for (let attemptIndex = 0; attemptIndex < attemptPlan.length && !report.clicked;
   const attempt = {
     number: attemptIndex + 1,
     browser: name,
+    searchMode: null,
     pages: [],
     status: 'started',
     error: null,
@@ -356,13 +419,8 @@ for (let attemptIndex = 0; attemptIndex < attemptPlan.length && !report.clicked;
     await installAnalyticsBlock(context);
 
     const page = await context.newPage();
-    const searchUrl = new URL('https://www.bing.com/search');
-    searchUrl.searchParams.set('q', QUERY);
-    searchUrl.searchParams.set('cc', 'US');
-    searchUrl.searchParams.set('setlang', 'en-US');
-    searchUrl.searchParams.set('count', '10');
-
-    await page.goto(searchUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 45000 });
+    const searchStarted = await openBingSearchFromHomepage(page, attempt);
+    if (!searchStarted) continue;
 
     if (attemptIndex === 0) {
       const globals = await page.evaluate(() => ({
