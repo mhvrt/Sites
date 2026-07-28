@@ -33,7 +33,7 @@ jobs:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
           BING_MAX_ATTEMPTS: "3"
           BING_MAX_SERP_PAGES: "5"
-        run: node scripts/run-bing-antminer-referral-v5.mjs
+        run: node scripts/run-bing-antminer-referral-v11.mjs
       - name: Publish summary
         if: always()
         env:
@@ -62,6 +62,7 @@ jobs:
             }
           }
           console.log(`- EMCD pages visited: \`${r.emcdPagesVisited ?? 0}\``);
+          console.log(`- Internal walk confirmed: \`${r.internalWalkConfirmed ? 'yes' : 'no'}\``);
           console.log(`- Final URL: \`${r.finalUrl || 'n/a'}\``);
           console.log(`- Referrer: \`${r.referrer || 'n/a'}\``);
           if (Array.isArray(r.emcdRoute) && r.emcdRoute.length) {
