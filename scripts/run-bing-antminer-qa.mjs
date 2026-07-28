@@ -9,10 +9,29 @@ const TARGET_HOST = 'emcd.io';
 const TARGET_PATH = '/articles/mining/mining-with-antminer-s9-asic-is-it-still-profitable/';
 const TARGET_URL = `https://${TARGET_HOST}${TARGET_PATH}`;
 const EXPECTED_TITLE = 'Mining with Antminer S9 ASIC: Is It Still Profitable?';
+const MAX_SERP_PAGES = 5;
 
 const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
 const cleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
 const normalizeHost = (value) => String(value || '').toLowerCase().replace(/^www\./, '');
+
+function normalizeTitle(value) {
+  return cleanText(value)
+    .toLowerCase()
+    .replace(/[“”]/g, '"')
+    .replace(/[’]/g, "'")
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim();
+}
+
+function titleMatches(value) {
+  const observed = normalizeTitle(value);
+  const expected = normalizeTitle(EXPECTED_TITLE);
+  return observed === expected || (
+    observed.includes('mining with antminer s9 asic') &&
+    observed.includes('still profitable')
+  );
+}
 
 function decodeBingUrl(href) {
   try {
@@ -47,7 +66,6 @@ function isTargetUrl(value) {
 
 async function naturalBingPause(page, targetLink) {
   const started = Date.now();
-
   await page.waitForTimeout(randomBetween(2400, 4800));
 
   const viewport = page.viewportSize() || { width: 1440, height: 900 };
@@ -70,7 +88,6 @@ async function naturalBingPause(page, targetLink) {
   await targetLink.scrollIntoViewIfNeeded();
   await targetLink.hover({ timeout: 5000 }).catch(() => undefined);
   await page.waitForTimeout(randomBetween(2200, 5200));
-
   return Date.now() - started;
 }
 
@@ -129,7 +146,6 @@ async function browseEmcd(page, report) {
 
       const text = cleanText(await link.innerText().catch(() => ''));
       if (!text) continue;
-
       candidates.push({ index: i, url: absolute });
     }
 
@@ -183,6 +199,9 @@ const report = {
   bingRegion: null,
   bingMarket: null,
   bingPreClickMs: null,
+  serpPage: null,
+  serpPagesChecked: 0,
+  rankOnPage: null,
   rank: null,
   finalUrl: null,
   referrer: null,
@@ -217,35 +236,57 @@ try {
   });
 
   const page = await context.newPage();
-  const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(QUERY)}&cc=US&setlang=en-US`;
-  await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-
-  const globals = await page.evaluate(() => ({
-    region: globalThis?._G?.Region || null,
-    market: globalThis?._G?.Mkt || null,
-  })).catch(() => ({ region: null, market: null }));
-  report.bingRegion = globals.region;
-  report.bingMarket = globals.market;
-
-  const results = page.locator('li.b_algo h2 a');
-  const count = Math.min(await results.count(), 50);
   let found = null;
 
-  for (let i = 0; i < count; i += 1) {
-    const link = results.nth(i);
-    const title = cleanText(await link.innerText().catch(() => ''));
-    const href = (await link.getAttribute('href')) || '';
-    const decoded = decodeBingUrl(href);
+  for (let serpPage = 1; serpPage <= MAX_SERP_PAGES && !found; serpPage += 1) {
+    const searchUrl = new URL('https://www.bing.com/search');
+    searchUrl.searchParams.set('q', QUERY);
+    searchUrl.searchParams.set('cc', 'US');
+    searchUrl.searchParams.set('setlang', 'en-US');
+    searchUrl.searchParams.set('count', '10');
+    if (serpPage > 1) searchUrl.searchParams.set('first', String((serpPage - 1) * 10 + 1));
 
-    if (title === EXPECTED_TITLE && isTargetUrl(decoded)) {
-      found = { link, rank: i + 1, decoded, title };
-      break;
+    await page.goto(searchUrl.toString(), { waitUntil: 'domcontentloaded', timeout: 45000 });
+    await page.waitForTimeout(randomBetween(1400, 3000));
+    report.serpPagesChecked = serpPage;
+
+    if (serpPage === 1) {
+      const globals = await page.evaluate(() => ({
+        region: globalThis?._G?.Region || null,
+        market: globalThis?._G?.Mkt || null,
+      })).catch(() => ({ region: null, market: null }));
+      report.bingRegion = globals.region;
+      report.bingMarket = globals.market;
+    }
+
+    const results = page.locator('li.b_algo h2 a');
+    const count = Math.min(await results.count(), 20);
+
+    for (let i = 0; i < count; i += 1) {
+      const link = results.nth(i);
+      const title = cleanText(await link.innerText().catch(() => ''));
+      const href = (await link.getAttribute('href')) || '';
+      const decoded = decodeBingUrl(href);
+
+      if (isTargetUrl(decoded) && titleMatches(title)) {
+        found = {
+          link,
+          title,
+          decoded,
+          serpPage,
+          rankOnPage: i + 1,
+          absoluteRank: (serpPage - 1) * 10 + i + 1,
+        };
+        break;
+      }
     }
   }
 
-  if (!found) throw new Error('exact_target_not_found_on_bing_results');
+  if (!found) throw new Error(`exact_target_not_found_in_first_${MAX_SERP_PAGES}_bing_pages`);
 
-  report.rank = found.rank;
+  report.serpPage = found.serpPage;
+  report.rankOnPage = found.rankOnPage;
+  report.rank = found.absoluteRank;
   report.matchedTitle = found.title;
   report.matchedUrl = found.decoded;
   report.bingPreClickMs = await naturalBingPause(page, found.link);
