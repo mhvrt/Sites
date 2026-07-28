@@ -48,6 +48,7 @@ jobs:
           console.log(`- Bing region: \`${r.bingRegion || 'unknown'}\``);
           console.log(`- Bing market: \`${r.bingMarket || 'unknown'}\``);
           console.log(`- Rank: \`${r.rank ?? 'not found'}\``);
+          console.log(`- Bing dwell before click: \`${r.bingPreClickMs ? `${(r.bingPreClickMs / 1000).toFixed(1)}s` : 'n/a'}\``);
           console.log(`- Clicked: \`${r.clicked ? 'yes' : 'no'}\``);
           console.log(`- EMCD pages visited: \`${r.emcdPagesVisited ?? 0}\``);
           console.log(`- Final URL: \`${r.finalUrl || 'n/a'}\``);
