@@ -115,63 +115,103 @@ async function readPage(page, minMs = 6500, maxMs = 15000) {
 }
 
 async function collectPerformaLinks(page) {
-  const links = page.locator("a[href]");
-  const count = Math.min(await links.count(), 600);
   const matches = [];
+  const frames = page.frames();
 
-  for (let i = 0; i < count; i += 1) {
-    const link = links.nth(i);
-    if (!(await link.isVisible().catch(() => false))) continue;
-    const href = await link.getAttribute("href");
-    if (!href) continue;
+  for (let frameIndex = 0; frameIndex < frames.length; frameIndex += 1) {
+    const frame = frames[frameIndex];
+    const links = frame.locator("a[href]");
+    const count = Math.min(await links.count().catch(() => 0), 700);
 
-    let resolved;
-    try {
-      resolved = new URL(href, page.url());
-    } catch {
-      continue;
+    for (let i = 0; i < count; i += 1) {
+      const link = links.nth(i);
+      if (!(await link.isVisible().catch(() => false))) continue;
+      const href = await link.getAttribute("href").catch(() => null);
+      if (!href) continue;
+
+      let resolved;
+      try {
+        resolved = new URL(href, frame.url() || page.url());
+      } catch {
+        continue;
+      }
+      if (!isPerforma(resolved.href)) continue;
+
+      const text = cleanText(
+        (await link.innerText().catch(() => "")) ||
+          (await link.getAttribute("aria-label").catch(() => "")) ||
+          (await link.getAttribute("title").catch(() => "")) ||
+          resolved.pathname,
+      );
+      const rel = cleanText(await link.getAttribute("rel").catch(() => ""), 120);
+      matches.push({
+        frameIndex,
+        index: i,
+        href: resolved.href,
+        text,
+        rel,
+        frameUrl: frame.url() || null,
+      });
     }
-    if (!isPerforma(resolved.href)) continue;
-
-    const text = cleanText(
-      (await link.innerText().catch(() => "")) ||
-        (await link.getAttribute("aria-label").catch(() => "")) ||
-        (await link.getAttribute("title").catch(() => "")) ||
-        resolved.pathname,
-    );
-    const rel = cleanText(await link.getAttribute("rel").catch(() => ""), 120);
-    matches.push({ index: i, href: resolved.href, text, rel });
   }
 
   return matches;
 }
 
-async function clickPerformaLink(context, page, candidate) {
-  const link = page.locator("a[href]").nth(candidate.index);
-  await link.scrollIntoViewIfNeeded().catch(() => undefined);
-
-  // Keep the publisher's actual href and rel/referrer policy intact; only force same-tab navigation.
-  await link.evaluate((element) => element.removeAttribute("target")).catch(() => undefined);
-
+function waitForPerformaNavigation(context, page, timeout = 22000) {
   const sameTab = page
-    .waitForURL((url) => isPerforma(url.toString()), { timeout: 30000, waitUntil: "domcontentloaded" })
-    .then(() => page)
-    .catch(() => null);
-  const popup = context
-    .waitForEvent("page", { timeout: 30000 })
-    .then(async (newPage) => {
-      await newPage.waitForLoadState("domcontentloaded", { timeout: 20000 }).catch(() => undefined);
-      return isPerforma(newPage.url()) ? newPage : null;
-    })
-    .catch(() => null);
+    .waitForURL((url) => isPerforma(url.toString()), { timeout, waitUntil: "domcontentloaded" })
+    .then(() => page);
 
+  const popup = context
+    .waitForEvent("page", { timeout })
+    .then(async (newPage) => {
+      await newPage.waitForLoadState("domcontentloaded", { timeout: 15000 }).catch(() => undefined);
+      if (!isPerforma(newPage.url())) throw new Error("popup_not_performa");
+      return newPage;
+    });
+
+  return Promise.any([sameTab, popup]).catch(() => null);
+}
+
+async function clickPerformaLink(context, page, candidate) {
+  const frame = page.frames()[candidate.frameIndex];
+  if (!frame) throw new Error("source_frame_disappeared");
+
+  const link = frame.locator("a[href]").nth(candidate.index);
+  await link.scrollIntoViewIfNeeded().catch(() => undefined);
+  await page.waitForTimeout(randomBetween(450, 1200));
+
+  // Preserve the publisher's actual href/rel/referrer policy. Only force navigation into the top page.
+  await link.evaluate((element) => {
+    element.removeAttribute("target");
+    if (window.top !== window) element.setAttribute("target", "_top");
+  }).catch(() => undefined);
+
+  let destinationPromise = waitForPerformaNavigation(context, page);
+  let physicalClickThrew = false;
   try {
     await link.click({ timeout: 10000 });
   } catch {
-    await link.evaluate((element) => element.click()).catch(() => undefined);
+    physicalClickThrew = true;
   }
 
-  const destination = await Promise.race([sameTab, popup]);
+  let destination = await destinationPromise;
+  if (destination) return destination;
+
+  // Retry through the page's own DOM click if Playwright's physical click was intercepted or produced no navigation.
+  destinationPromise = waitForPerformaNavigation(context, page);
+  const domClicked = await link.evaluate((element) => {
+    try {
+      element.click();
+      return true;
+    } catch {
+      return false;
+    }
+  }).catch(() => false);
+
+  if (!domClicked && physicalClickThrew) throw new Error("performa_click_failed");
+  destination = await destinationPromise;
   if (!destination) throw new Error("performa_click_navigation_timeout");
   return destination;
 }
@@ -210,6 +250,24 @@ async function browsePerforma(page) {
   return page;
 }
 
+async function loadSource(page) {
+  try {
+    await page.goto(SOURCE_URL.href, { waitUntil: "domcontentloaded", timeout: 55000 });
+  } catch (error) {
+    const current = page.url();
+    let sameHost = false;
+    try {
+      sameHost = normalizeHost(new URL(current).hostname) === normalizeHost(SOURCE_URL.hostname);
+    } catch {}
+    if (!sameHost) throw error;
+    console.warn(`Source load timed out but partial document is available: ${SOURCE_URL.href}`);
+  }
+
+  await page.waitForTimeout(randomBetween(1200, 3200));
+  await acceptConsent(page);
+  await page.waitForTimeout(randomBetween(1000, 2400));
+}
+
 const profile = pick(profiles);
 const browser = await chromium.launch({ headless: false });
 
@@ -232,13 +290,20 @@ try {
   });
 
   let page = await context.newPage();
-  await page.goto(SOURCE_URL.href, { waitUntil: "domcontentloaded", timeout: 45000 });
-  await acceptConsent(page);
-  await page.waitForTimeout(randomBetween(1200, 3200));
+  await loadSource(page);
   await readPage(page);
 
-  const candidates = await collectPerformaLinks(page);
-  if (!candidates.length) throw new Error(`performa_link_not_found_on_source:${SOURCE_URL.href}`);
+  let candidates = await collectPerformaLinks(page);
+  if (!candidates.length) {
+    // Give delayed/lazy article widgets one more chance to render after a lower-page scroll.
+    await readPage(page, 3500, 7000);
+    candidates = await collectPerformaLinks(page);
+  }
+
+  if (!candidates.length) {
+    const frameUrls = page.frames().map((frame) => frame.url()).filter(Boolean).slice(0, 20);
+    throw new Error(`performa_link_not_found_on_source:${SOURCE_URL.href};frames=${JSON.stringify(frameUrls)}`);
+  }
 
   const candidate = pick(candidates);
   page = await clickPerformaLink(context, page, candidate);
@@ -254,6 +319,7 @@ try {
       profile: profile.id,
       sourceUrl: SOURCE_URL.href,
       sourceOrigin: SOURCE_URL.origin,
+      sourceFrameUrl: candidate.frameUrl,
       sourceLinkText: candidate.text,
       sourceLinkRel: candidate.rel || null,
       clickedUrl: candidate.href,
