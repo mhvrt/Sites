@@ -12,6 +12,7 @@ const EXPECTED_TITLE = 'Mining with Antminer S9 ASIC: Is It Still Profitable?';
 
 const randomBetween = (min, max) => Math.floor(min + Math.random() * (max - min + 1));
 const cleanText = (value) => String(value || '').replace(/\s+/g, ' ').trim();
+const normalizeHost = (value) => String(value || '').toLowerCase().replace(/^www\./, '');
 
 function decodeBingUrl(href) {
   try {
@@ -26,10 +27,6 @@ function decodeBingUrl(href) {
   }
 }
 
-function normalizeHost(value) {
-  return String(value || '').toLowerCase().replace(/^www\./, '');
-}
-
 function isEmcdUrl(value) {
   try {
     const u = new URL(value);
@@ -42,13 +39,39 @@ function isEmcdUrl(value) {
 function isTargetUrl(value) {
   try {
     const u = new URL(value);
-    return (
-      normalizeHost(u.hostname) === TARGET_HOST &&
-      u.pathname.replace(/\/+$/, '/') === TARGET_PATH
-    );
+    return normalizeHost(u.hostname) === TARGET_HOST && u.pathname.replace(/\/+$/, '/') === TARGET_PATH;
   } catch {
     return false;
   }
+}
+
+async function naturalBingPause(page, targetLink) {
+  const started = Date.now();
+
+  await page.waitForTimeout(randomBetween(2400, 4800));
+
+  const viewport = page.viewportSize() || { width: 1440, height: 900 };
+  await page.mouse.move(
+    randomBetween(120, Math.max(121, viewport.width - 120)),
+    randomBetween(120, Math.max(121, viewport.height - 120)),
+    { steps: randomBetween(8, 18) },
+  ).catch(() => undefined);
+
+  const scrollHeight = await page.evaluate(() => Math.max(document.body.scrollHeight, document.documentElement.scrollHeight)).catch(() => 0);
+  if (scrollHeight > viewport.height + 250) {
+    await page.mouse.wheel(0, randomBetween(180, 520)).catch(() => undefined);
+    await page.waitForTimeout(randomBetween(900, 2200));
+    if (Math.random() < 0.35) {
+      await page.mouse.wheel(0, -randomBetween(80, 220)).catch(() => undefined);
+      await page.waitForTimeout(randomBetween(600, 1400));
+    }
+  }
+
+  await targetLink.scrollIntoViewIfNeeded();
+  await targetLink.hover({ timeout: 5000 }).catch(() => undefined);
+  await page.waitForTimeout(randomBetween(2200, 5200));
+
+  return Date.now() - started;
 }
 
 async function naturalRead(page) {
@@ -59,11 +82,13 @@ async function naturalRead(page) {
   const maxScroll = Math.max(0, scrollHeight - viewportHeight);
 
   if (maxScroll > 250) {
-    const first = randomBetween(Math.min(200, maxScroll), Math.max(Math.min(900, maxScroll), Math.min(200, maxScroll)));
+    const firstMax = Math.min(maxScroll, 900);
+    const firstMin = Math.min(maxScroll, 180);
+    const first = randomBetween(firstMin, Math.max(firstMin, firstMax));
     await page.evaluate((y) => window.scrollTo({ top: y, behavior: 'smooth' }), first).catch(() => undefined);
     await page.waitForTimeout(randomBetween(900, 2200));
 
-    const secondMin = Math.min(maxScroll, first + 200);
+    const secondMin = Math.min(maxScroll, first + 180);
     const secondMax = Math.min(maxScroll, first + randomBetween(450, 1300));
     if (secondMax > secondMin) {
       const second = randomBetween(secondMin, secondMax);
@@ -99,14 +124,13 @@ async function browseEmcd(page, report) {
         continue;
       }
 
-      if (!isEmcdUrl(absolute)) continue;
-      if (visited.has(absolute)) continue;
-      if (absolute === page.url()) continue;
+      if (!isEmcdUrl(absolute) || visited.has(absolute) || absolute === page.url()) continue;
+      if (/\.(?:pdf|zip|docx?|xlsx?|pptx?)(?:$|[?#])/i.test(absolute)) continue;
 
       const text = cleanText(await link.innerText().catch(() => ''));
       if (!text) continue;
 
-      candidates.push({ index: i, url: absolute, text });
+      candidates.push({ index: i, url: absolute });
     }
 
     if (!candidates.length) break;
@@ -116,18 +140,25 @@ async function browseEmcd(page, report) {
     const before = page.url();
 
     await link.scrollIntoViewIfNeeded().catch(() => undefined);
+    await link.hover({ timeout: 3000 }).catch(() => undefined);
     await page.waitForTimeout(randomBetween(500, 1500));
     await link.evaluate((el) => el.removeAttribute('target')).catch(() => undefined);
 
     const nav = page.waitForURL(
       (u) => isEmcdUrl(u.toString()) && u.toString() !== before,
       { timeout: 30000, waitUntil: 'domcontentloaded' },
-    ).catch(() => undefined);
+    ).catch(() => null);
 
-    await link.click({ timeout: 15000 }).catch(() => undefined);
-    await nav;
+    try {
+      await link.click({ timeout: 15000 });
+    } catch {
+      continue;
+    }
+
+    const navigated = await nav;
+    if (!navigated) continue;
+
     await page.waitForTimeout(randomBetween(1200, 3200));
-
     const current = page.url();
     if (!isEmcdUrl(current) || current === before) continue;
 
@@ -151,6 +182,7 @@ const report = {
   matchedUrl: null,
   bingRegion: null,
   bingMarket: null,
+  bingPreClickMs: null,
   rank: null,
   finalUrl: null,
   referrer: null,
@@ -166,7 +198,7 @@ try {
     viewport: { width: 1440, height: 900 },
   });
 
-  // Keep the destination analytics clean: the run is synthetic QA, not a real user session.
+  // Keep this synthetic monitor out of destination analytics while preserving the real Bing navigation.
   await context.route('**/*', async (route) => {
     try {
       const host = new URL(route.request().url()).hostname.toLowerCase();
@@ -187,7 +219,6 @@ try {
   const page = await context.newPage();
   const searchUrl = `https://www.bing.com/search?q=${encodeURIComponent(QUERY)}&cc=US&setlang=en-US`;
   await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 45000 });
-  await page.waitForTimeout(randomBetween(1800, 4200));
 
   const globals = await page.evaluate(() => ({
     region: globalThis?._G?.Region || null,
@@ -206,9 +237,8 @@ try {
     const href = (await link.getAttribute('href')) || '';
     const decoded = decodeBingUrl(href);
 
-    // Require both the exact SERP title supplied by the user and the expected EMCD article URL.
     if (title === EXPECTED_TITLE && isTargetUrl(decoded)) {
-      found = { link, rank: i + 1, href, decoded, title };
+      found = { link, rank: i + 1, decoded, title };
       break;
     }
   }
@@ -218,9 +248,7 @@ try {
   report.rank = found.rank;
   report.matchedTitle = found.title;
   report.matchedUrl = found.decoded;
-
-  await found.link.scrollIntoViewIfNeeded();
-  await page.waitForTimeout(randomBetween(700, 1800));
+  report.bingPreClickMs = await naturalBingPause(page, found.link);
 
   const nav = page.waitForURL(
     (u) => isTargetUrl(u.toString()),
