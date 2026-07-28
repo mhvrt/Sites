@@ -174,7 +174,7 @@ async function openBingSearchFromHomepage(page, attempt) {
     if (!(await submit.isVisible().catch(() => false))) continue;
 
     const before = page.url();
-    const navPromise = waitForBingSearchNavigation(page, before, 10000);
+    const navPromise = waitForBingSearchNavigation(page, before, 7000);
     await submit.click({ timeout: 5000 }).catch(() => undefined);
     const navigated = await navPromise;
     if (navigated) {
@@ -184,14 +184,35 @@ async function openBingSearchFromHomepage(page, attempt) {
     }
   }
 
-  const before = page.url();
-  const navPromise = waitForBingSearchNavigation(page, before, 10000);
-  await input.press('Enter').catch(() => undefined);
-  const navigated = await navPromise;
-  if (navigated) {
-    attempt.searchMode = 'homepage_input_enter';
-    await page.waitForTimeout(randomBetween(1200, 2400));
-    return true;
+  {
+    const before = page.url();
+    const navPromise = waitForBingSearchNavigation(page, before, 7000);
+    await input.press('Enter').catch(() => undefined);
+    const navigated = await navPromise;
+    if (navigated) {
+      attempt.searchMode = 'homepage_input_enter';
+      await page.waitForTimeout(randomBetween(1200, 2400));
+      return true;
+    }
+  }
+
+  {
+    const before = page.url();
+    const navPromise = waitForBingSearchNavigation(page, before, 10000);
+    const submitted = await input.evaluate((el) => {
+      const form = el.form || el.closest('form');
+      if (!form || typeof form.requestSubmit !== 'function') return false;
+      form.requestSubmit();
+      return true;
+    }).catch(() => false);
+    if (submitted) {
+      const navigated = await navPromise;
+      if (navigated) {
+        attempt.searchMode = 'homepage_native_requestSubmit';
+        await page.waitForTimeout(randomBetween(1200, 2400));
+        return true;
+      }
+    }
   }
 
   attempt.status = 'bing_search_submit_failed';
