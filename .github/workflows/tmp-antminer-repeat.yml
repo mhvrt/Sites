@@ -1,0 +1,65 @@
+name: Temporary Antminer S9 repeated Bing US check
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        run: [1,2,3]
+        first: [1,11,21,31,41,51]
+    steps:
+      - uses: actions/checkout@v4
+      - run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps firefox
+      - name: Check Bing US
+        env:
+          FIRST: ${{ matrix.first }}
+          RUNNO: ${{ matrix.run }}
+        run: |
+          node <<'NODE'
+          const { firefox } = require('playwright');
+          const fs = require('fs');
+          const first = Number(process.env.FIRST);
+          const runNo = Number(process.env.RUNNO);
+          const targetHost = 'emcd.io';
+          (async()=>{
+            const browser = await firefox.launch({headless:true});
+            const context = await browser.newContext({
+              locale:'en-US', timezoneId:'America/New_York',
+              userAgent:'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0'
+            });
+            const page = await context.newPage();
+            const url=`https://www.bing.com/search?q=antminer%20s9&cc=US&setlang=en-US&first=${first}&FORM=PERE`;
+            const resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});
+            await page.waitForTimeout(2500);
+            const text=await page.locator('body').innerText().catch(()=> '');
+            const finalUrl=page.url();
+            const blocked=/captcha|verify you are human|unusual traffic|challenge/i.test(text+' '+finalUrl);
+            const market=await page.evaluate(()=>({lang:document.documentElement.lang,region:globalThis._G?.Region,mkt:globalThis._G?.Mkt})).catch(()=>({}));
+            const results=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a'); return a?{href:a.href,title:(a.textContent||'').trim()}:null}).filter(Boolean)).catch(()=>[]);
+            let out=`RUN ${runNo}\nFIRST ${first}\nSTATUS ${resp&&resp.status()}\nFINAL_URL ${finalUrl}\nBLOCKED ${blocked}\nMARKET ${JSON.stringify(market)}\nCOUNT ${results.length}\n`;
+            results.forEach((r,i)=>out+=`RANK ${first+i}: ${r.href} | ${r.title}\n`);
+            const hits=[];
+            for(let i=0;i<results.length;i++){
+              const r=results[i];
+              if((r.href||'').toLowerCase().includes(targetHost)) hits.push({rank:first+i,url:r.href,title:r.title});
+            }
+            out += hits.length ? `HITS ${JSON.stringify(hits)}\n` : (blocked||!results.length ? 'INVALID\n' : 'NO_HIT\n');
+            console.log(out);
+            fs.writeFileSync(`antminer-${runNo}-${first}.txt`,out);
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exitCode=2});
+          NODE
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: antminer-${{ matrix.run }}-${{ matrix.first }}
+          path: antminer-${{ matrix.run }}-${{ matrix.first }}.txt
