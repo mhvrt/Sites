@@ -126,6 +126,13 @@ async function naturalBingMovement(page) {
   }
 }
 
+async function waitForBingSearchNavigation(page, before, timeout = 12000) {
+  return page.waitForURL(
+    (u) => u.toString() !== before && u.pathname === '/search',
+    { timeout, waitUntil: 'domcontentloaded' },
+  ).catch(() => null);
+}
+
 async function openBingSearchFromHomepage(page, attempt) {
   await page.goto('https://www.bing.com/?cc=US&setlang=en-US', {
     waitUntil: 'domcontentloaded',
@@ -140,7 +147,7 @@ async function openBingSearchFromHomepage(page, attempt) {
     return false;
   }
 
-  const input = page.locator('textarea[name="q"], input[name="q"], input[type="search"], #sb_form_q').first();
+  const input = page.locator('#sb_form_q, textarea[name="q"], input[name="q"], input[type="search"]').first();
   if (!(await input.isVisible().catch(() => false))) {
     attempt.status = 'bing_search_input_missing';
     return false;
@@ -149,25 +156,46 @@ async function openBingSearchFromHomepage(page, attempt) {
   await naturalBingMovement(page);
   await input.click({ timeout: 5000 });
   await page.waitForTimeout(randomBetween(400, 1000));
-  await page.keyboard.type(QUERY, { delay: randomBetween(70, 140) });
+  await input.fill('');
+  await input.pressSequentially(QUERY, { delay: randomBetween(70, 140) });
+  attempt.typedQuery = await input.inputValue().catch(() => null);
   await page.waitForTimeout(randomBetween(700, 1500));
 
-  const before = page.url();
-  const nav = page.waitForURL(
-    (u) => u.toString() !== before && u.pathname === '/search',
-    { timeout: 30000, waitUntil: 'domcontentloaded' },
-  ).catch(() => null);
+  const submitSelectors = [
+    '#search_icon',
+    '#sb_form_go',
+    'form#sb_form button[type="submit"]',
+    'form#sb_form input[type="submit"]',
+    'button[aria-label*="Search"]',
+  ];
 
-  await page.keyboard.press('Enter');
-  const navigated = await nav;
-  if (!navigated) {
-    attempt.status = 'bing_search_submit_failed';
-    return false;
+  for (const selector of submitSelectors) {
+    const submit = page.locator(selector).first();
+    if (!(await submit.isVisible().catch(() => false))) continue;
+
+    const before = page.url();
+    const navPromise = waitForBingSearchNavigation(page, before, 10000);
+    await submit.click({ timeout: 5000 }).catch(() => undefined);
+    const navigated = await navPromise;
+    if (navigated) {
+      attempt.searchMode = `homepage_click:${selector}`;
+      await page.waitForTimeout(randomBetween(1200, 2400));
+      return true;
+    }
   }
 
-  await page.waitForTimeout(randomBetween(1200, 2400));
-  attempt.searchMode = 'homepage_keyboard';
-  return true;
+  const before = page.url();
+  const navPromise = waitForBingSearchNavigation(page, before, 10000);
+  await input.press('Enter').catch(() => undefined);
+  const navigated = await navPromise;
+  if (navigated) {
+    attempt.searchMode = 'homepage_input_enter';
+    await page.waitForTimeout(randomBetween(1200, 2400));
+    return true;
+  }
+
+  attempt.status = 'bing_search_submit_failed';
+  return false;
 }
 
 async function naturalBingPause(page, targetLink) {
@@ -403,6 +431,7 @@ for (let attemptIndex = 0; attemptIndex < attemptPlan.length && !report.clicked;
     number: attemptIndex + 1,
     browser: name,
     searchMode: null,
+    typedQuery: null,
     pages: [],
     status: 'started',
     error: null,
