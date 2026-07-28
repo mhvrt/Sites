@@ -1,6 +1,8 @@
-name: Manual Bing Antminer QA
+name: Bing Antminer QA
 
 on:
+  schedule:
+    - cron: "5,15,25,35,45,55 * * * *"
   workflow_dispatch:
 
 permissions:
@@ -8,6 +10,9 @@ permissions:
 
 jobs:
   qa:
+    concurrency:
+      group: bing-antminer-qa-${{ github.event.schedule || github.run_id }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -17,6 +22,12 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps firefox
+      - name: Random second jitter
+        shell: bash
+        run: |
+          delay=$((RANDOM % 50))
+          echo "Random Bing QA delay: ${delay}s"
+          sleep "$delay"
       - name: Run synthetic Bing QA click
         env:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
@@ -31,7 +42,9 @@ jobs:
           let r = {};
           try { r = JSON.parse(fs.readFileSync(process.env.REPORT_PATH, 'utf8')); } catch {}
           console.log('## Bing Antminer QA');
-          console.log(`- Synthetic: \`${r.synthetic ? 'yes' : 'unknown'}\``);
+          console.log(`- Query: \`${r.query || 'antminer s9'}\``);
+          console.log(`- Expected title: \`${r.expectedTitle || 'Mining with Antminer S9 ASIC: Is It Still Profitable?'}\``);
+          console.log(`- Matched title: \`${r.matchedTitle || 'not found'}\``);
           console.log(`- Bing region: \`${r.bingRegion || 'unknown'}\``);
           console.log(`- Bing market: \`${r.bingMarket || 'unknown'}\``);
           console.log(`- Rank: \`${r.rank ?? 'not found'}\``);
@@ -43,5 +56,5 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bing-antminer-qa
+          name: bing-antminer-qa-${{ github.run_id }}
           path: ${{ runner.temp }}/bing-antminer-qa.json
