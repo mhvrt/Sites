@@ -1,124 +1,64 @@
-name: Temporary Bing keyword scan
+name: Temporary Bing Antminer verify
 
 on:
   pull_request:
     branches: [main]
 
 jobs:
-  scan:
-    name: "${{ matrix.q.id }} ${{ matrix.q.text }}"
+  verify:
+    name: "Antminer S9 first=${{ matrix.first }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 8
+    timeout-minutes: 12
     strategy:
       fail-fast: false
-      max-parallel: 12
       matrix:
-        q:
-          - {id: 1, text: "when was bitcoin invented"}
-          - {id: 2, text: "blockchair"}
-          - {id: 3, text: "when did bitcoin come out"}
-          - {id: 4, text: "bitcoin release date"}
-          - {id: 5, text: "when was bitcoin launched"}
-          - {id: 6, text: "when was bitcoin created"}
-          - {id: 7, text: "bitcoin launch date"}
-          - {id: 8, text: "dgb"}
-          - {id: 9, text: "how to mine bitcoin on pc"}
-          - {id: 10, text: "kryptex"}
-          - {id: 11, text: "how to mine dogecoin"}
-          - {id: 12, text: "ethereum vs bitcoin"}
-          - {id: 13, text: "bitcoin creation date"}
-          - {id: 14, text: "when did bitcoin launch"}
-          - {id: 15, text: "how long do gpus last"}
-          - {id: 16, text: "how to make money with bitcoin"}
-          - {id: 17, text: "antminer s9"}
-          - {id: 18, text: "blochair"}
-          - {id: 19, text: "asic miners"}
-          - {id: 20, text: "reate a mining pool"}
-          - {id: 21, text: "how long has bitcoin been around"}
-          - {id: 22, text: "what are tokens in ai"}
-          - {id: 23, text: "safest crypto wallet"}
-          - {id: 24, text: "how long does a gpu last"}
-          - {id: 25, text: "what is solana"}
-          - {id: 26, text: "best crypto wallet for beginners"}
-          - {id: 27, text: "how long does it take to mine 1 bitcoin"}
-          - {id: 28, text: "dogecoin mining"}
-          - {id: 29, text: "stable busd"}
-          - {id: 30, text: "stable busd crypto"}
+        first: [1, 11]
     steps:
       - uses: actions/checkout@v4
-      - run: python -m pip install -q requests beautifulsoup4
-      - name: Check Bing US ranks 11-60
-        shell: python
+      - run: |
+          npm install --no-save playwright@1.58.2
+          npx playwright install --with-deps firefox
+      - name: Verify Bing US result
         env:
-          QUERY: "${{ matrix.q.text }}"
-          QID: "${{ matrix.q.id }}"
+          FIRST: "${{ matrix.first }}"
         run: |
-          import os, requests, urllib.parse, json, base64
-          from bs4 import BeautifulSoup
-          q=os.environ['QUERY']; qid=os.environ['QID']
-          ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0'
-          summary={'id':qid,'query':q,'pages':[],'hits':[]}
-          def decode_bing(href):
-            try:
-              u=urllib.parse.urlparse(href)
-              qs=urllib.parse.parse_qs(u.query)
-              x=(qs.get('u') or [''])[0]
-              if x.startswith('a1'):
-                raw=x[2:]; raw += '='*((4-len(raw)%4)%4)
-                return base64.b64decode(raw).decode('utf-8','ignore')
-            except Exception: pass
-            return href
-          for first in [11,21,31,41,51]:
-            url=f'https://www.bing.com/search?q={urllib.parse.quote(q)}&cc=US&setlang=en-US&first={first}&FORM=PERE'
-            try:
-              r=requests.get(url,timeout=20,headers={'User-Agent':ua,'Accept-Language':'en-US,en;q=0.9'})
-              text=r.text; low=(text+' '+r.url).lower()
-              blocked=('verify you are human' in low or 'unusual traffic' in low or 'captcha' in low or '/challenge' in r.url.lower())
-              soup=BeautifulSoup(text,'html.parser')
-              results=[]
-              for li in soup.select('li.b_algo'):
-                a=li.select_one('h2 a')
-                if not a or not a.get('href'): continue
-                href=a.get('href').strip(); dest=decode_bing(href)
-                results.append({'href':href,'dest':dest,'title':a.get_text(' ',strip=True)})
-              valid=(r.status_code==200 and not blocked and len(results)>0)
-              summary['pages'].append({'first':first,'valid':valid,'count':len(results)})
-              if valid:
-                for off,item in enumerate(results):
-                  if 'emcd.io' in (item['href']+' '+item['dest']).lower():
-                    summary['hits'].append({'rank':first+off,'url':item['dest'],'title':item['title'],'first':first})
-            except Exception as e:
-              summary['pages'].append({'first':first,'valid':False,'error':str(e)})
-          open(f'result-{qid}.json','w').write(json.dumps(summary,ensure_ascii=False,indent=2))
-      - name: Upload result
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: "bing-keyword-${{ matrix.q.id }}"
-          path: "result-${{ matrix.q.id }}.json"
-
-  aggregate:
-    needs: scan
-    if: always()
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          pattern: bing-keyword-*
-          path: results
-          merge-multiple: true
-      - name: Build summary
-        shell: python
-        run: |
-          import json, glob
-          rows=[]; hits=[]
-          for p in glob.glob('results/result-*.json'):
-            d=json.load(open(p)); rows.append(d); hits.extend([{'query':d['query'],**h} for h in d.get('hits',[])])
-          rows=sorted(rows,key=lambda x:int(x['id']))
-          out={'hits':hits,'rows':rows}
-          print(json.dumps(out,ensure_ascii=False,indent=2))
-          open('summary.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
+          node <<'NODE'
+          const { firefox } = require('playwright');
+          const fs = require('fs');
+          const first = Number(process.env.FIRST);
+          const targetDomain = 'emcd.io';
+          function decodeBing(href) {
+            try {
+              const u = new URL(href);
+              const x = u.searchParams.get('u') || '';
+              if (x.startsWith('a1')) {
+                let raw = x.slice(2).replace(/-/g,'+').replace(/_/g,'/');
+                while (raw.length % 4) raw += '=';
+                return Buffer.from(raw,'base64').toString('utf8');
+              }
+            } catch {}
+            return href;
+          }
+          (async()=>{
+            const browser = await firefox.launch({headless:true});
+            const context = await browser.newContext({locale:'en-US',timezoneId:'America/New_York'});
+            const page = await context.newPage();
+            const url=`https://www.bing.com/search?q=${encodeURIComponent('antminer s9')}&cc=US&setlang=en-US&first=${first}&FORM=PERE`;
+            const resp=await page.goto(url,{waitUntil:'domcontentloaded',timeout:45000});
+            await page.waitForTimeout(2500);
+            const body=(await page.locator('body').innerText().catch(()=>''))||'';
+            const blocked=/verify you are human|unusual traffic|captcha/i.test(body+' '+page.url());
+            const market=await page.evaluate(()=>({lang:document.documentElement.lang,region:globalThis._G?.Region,mkt:globalThis._G?.Mkt})).catch(()=>({}));
+            const results=await page.locator('li.b_algo').evaluateAll(lis=>lis.map(li=>{const a=li.querySelector('h2 a');return a?{href:a.href,title:(a.textContent||'').trim()}:null}).filter(Boolean));
+            let out={first,status:resp&&resp.status(),finalUrl:page.url(),blocked,market,results:results.map((r,i)=>({rank:first+i,href:r.href,dest:decodeBing(r.href),title:r.title}))};
+            out.hits=out.results.filter(r=>(r.dest+' '+r.href).toLowerCase().includes(targetDomain));
+            fs.writeFileSync(`verify-${first}.json`,JSON.stringify(out,null,2));
+            console.log(JSON.stringify(out,null,2));
+            await browser.close();
+          })().catch(e=>{console.error(e);process.exitCode=2});
+          NODE
       - uses: actions/upload-artifact@v4
+        if: always()
         with:
-          name: bing-keyword-summary
-          path: summary.json
+          name: "antminer-${{ matrix.first }}"
+          path: "verify-${{ matrix.first }}.json"
