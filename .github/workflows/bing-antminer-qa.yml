@@ -49,8 +49,13 @@ jobs:
           console.log(`- Bing market: \`${r.bingMarket || 'unknown'}\``);
           console.log(`- Rank: \`${r.rank ?? 'not found'}\``);
           console.log(`- Clicked: \`${r.clicked ? 'yes' : 'no'}\``);
+          console.log(`- EMCD pages visited: \`${r.emcdPagesVisited ?? 0}\``);
           console.log(`- Final URL: \`${r.finalUrl || 'n/a'}\``);
           console.log(`- Referrer: \`${r.referrer || 'n/a'}\``);
+          if (Array.isArray(r.emcdRoute) && r.emcdRoute.length) {
+            console.log('- EMCD route:');
+            for (const url of r.emcdRoute) console.log(`  - ${url}`);
+          }
           console.log(`- Error: \`${r.error || 'none'}\``);
           NODE
       - uses: actions/upload-artifact@v4
