@@ -257,8 +257,32 @@ async function inspectSerpPage(page, attempt, serpPage) {
 
 async function clickNextBingPage(page) {
   await naturalBingMovement(page);
-  const next = page.locator('a.sb_pagN, a[title="Next page"], a[aria-label="Next page"]').first();
-  if (!(await next.isVisible().catch(() => false))) return false;
+
+  const currentUrl = new URL(page.url());
+  const currentFirst = Number(currentUrl.searchParams.get('first') || 1);
+  const anchors = page.locator('a[href]');
+  const count = Math.min(await anchors.count(), 300);
+  const candidates = [];
+
+  for (let i = 0; i < count; i += 1) {
+    const link = anchors.nth(i);
+    if (!(await link.isVisible().catch(() => false))) continue;
+    const href = (await link.getAttribute('href')) || '';
+    if (!href) continue;
+
+    try {
+      const u = new URL(href, page.url());
+      if (normalizeHost(u.hostname) !== 'bing.com') continue;
+      if (u.pathname !== '/search') continue;
+      const first = Number(u.searchParams.get('first') || 0);
+      if (!Number.isFinite(first) || first <= currentFirst) continue;
+      candidates.push({ index: i, first });
+    } catch {}
+  }
+
+  if (!candidates.length) return false;
+  candidates.sort((a, b) => a.first - b.first);
+  const next = anchors.nth(candidates[0].index);
 
   await next.scrollIntoViewIfNeeded().catch(() => undefined);
   await next.hover({ timeout: 3000 }).catch(() => undefined);
