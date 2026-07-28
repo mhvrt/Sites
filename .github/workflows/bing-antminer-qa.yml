@@ -33,7 +33,7 @@ jobs:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
           BING_MAX_ATTEMPTS: "3"
           BING_MAX_SERP_PAGES: "5"
-        run: node scripts/run-bing-antminer-referral-v3.mjs
+        run: node scripts/run-bing-antminer-referral-v4.mjs
       - name: Publish summary
         if: always()
         env:
@@ -49,14 +49,16 @@ jobs:
           console.log(`- Matched title: \`${r.matchedTitle || 'not found'}\``);
           console.log(`- Successful attempt: \`${r.successfulAttempt ?? 'none'}\``);
           console.log(`- SERP page: \`${r.serpPage ?? 'not found'}\``);
-          console.log(`- Rank: \`${r.rank ?? 'not found'}\``);
           console.log(`- Clicked: \`${r.clicked ? 'yes' : 'no'}\``);
           if (Array.isArray(r.attempts) && r.attempts.length) {
             console.log('- Attempts:');
             for (const a of r.attempts) {
-              const pages = Array.isArray(a.pages) ? a.pages.map((p) => `p${p.page}:${p.challenge ? 'challenge' : `${p.resultCount} organic/${p.anchorCount ?? '?'} links`}`).join(', ') : '';
+              const pages = Array.isArray(a.pages)
+                ? a.pages.map((p) => `p${p.page}:${p.challenge ? 'challenge' : `${p.organicCount ?? '?'} organic/${p.anchorCount ?? '?'} links`}`).join(', ')
+                : '';
               const mode = a.searchMode ? ` via ${a.searchMode}` : '';
-              console.log(`  - #${a.number} ${a.browser}: ${a.status}${mode}${pages ? ` (${pages})` : ''}${a.error ? ` — ${a.error}` : ''}`);
+              const popup = a.popupOpened ? ` popup=${a.popupUrl || 'opened'}` : '';
+              console.log(`  - #${a.number} ${a.browser}: ${a.status}${mode}${popup}${pages ? ` (${pages})` : ''}${a.error ? ` — ${a.error}` : ''}`);
             }
           }
           console.log(`- EMCD pages visited: \`${r.emcdPagesVisited ?? 0}\``);
