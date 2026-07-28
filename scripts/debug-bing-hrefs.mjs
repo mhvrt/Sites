@@ -36,28 +36,52 @@ try {
     if (serpPage > 1) url.searchParams.set('first', String((serpPage - 1) * 10 + 1));
 
     await page.goto(url.toString(), { waitUntil: 'domcontentloaded', timeout: 45000 });
-    await page.waitForTimeout(1800);
+    await page.waitForTimeout(2500);
 
     const globals = await page.evaluate(() => ({ region: globalThis?._G?.Region || null, market: globalThis?._G?.Mkt || null })).catch(() => ({ region: null, market: null }));
-    const links = page.locator('li.b_algo h2 a');
-    const count = Math.min(await links.count(), 20);
+    const pageTitle = await page.title().catch(() => '');
+    const bodyText = await page.locator('body').innerText().catch(() => '');
+
+    const resultLinks = page.locator('li.b_algo h2 a');
+    const resultCount = Math.min(await resultLinks.count(), 20);
     const results = [];
 
-    for (let i = 0; i < count; i += 1) {
-      const link = links.nth(i);
+    for (let i = 0; i < resultCount; i += 1) {
+      const link = resultLinks.nth(i);
       const title = String(await link.innerText().catch(() => '')).replace(/\s+/g, ' ').trim();
       const rawHref = (await link.getAttribute('href')) || '';
       const decodedHref = decodeBingUrl(rawHref);
       const item = { rankOnPage: i + 1, title, rawHref, decodedHref };
       results.push(item);
-
       const haystack = `${title}\n${rawHref}\n${decodedHref}`.toLowerCase();
       if (haystack.includes('emcd.io') || haystack.includes('mining with antminer s9') || haystack.includes('still profitable')) {
         report.targetMentions.push({ serpPage, ...item });
       }
     }
 
-    report.pages.push({ serpPage, url: page.url(), region: globals.region, market: globals.market, results });
+    const allAnchors = page.locator('a[href]');
+    const anchorCount = Math.min(await allAnchors.count(), 120);
+    const anchorSamples = [];
+    for (let i = 0; i < anchorCount; i += 1) {
+      const a = allAnchors.nth(i);
+      const text = String(await a.innerText().catch(() => '')).replace(/\s+/g, ' ').trim().slice(0, 180);
+      const rawHref = (await a.getAttribute('href')) || '';
+      if (!rawHref) continue;
+      anchorSamples.push({ text, rawHref, decodedHref: decodeBingUrl(rawHref) });
+    }
+
+    report.pages.push({
+      serpPage,
+      url: page.url(),
+      region: globals.region,
+      market: globals.market,
+      pageTitle,
+      bodyTextSample: bodyText.replace(/\s+/g, ' ').trim().slice(0, 2000),
+      resultCount,
+      totalAnchorCount: await allAnchors.count(),
+      results,
+      anchorSamples,
+    });
   }
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error);
