@@ -8,9 +8,9 @@ permissions:
   contents: read
 
 jobs:
-  bing-production:
+  bing-target-click:
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -18,19 +18,16 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox
-      - name: Run Bing to EMCD v3
+      - name: Verify Bing target click
         env:
-          REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
-          BING_MAX_ATTEMPTS: "3"
-          BING_MAX_SERP_PAGES: "5"
-          SMOKE_REVISION: "9"
-        run: node scripts/run-bing-antminer-referral-v3.mjs
+          REPORT_PATH: ${{ runner.temp }}/bing-target-click.json
+        run: node scripts/debug-bing-target-click.mjs
       - name: Show report
         if: always()
-        run: cat "${{ runner.temp }}/bing-antminer-qa.json" || true
+        run: cat "${{ runner.temp }}/bing-target-click.json" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bing-production-${{ github.run_id }}
-          path: ${{ runner.temp }}/bing-antminer-qa.json
+          name: bing-target-click-${{ github.run_id }}
+          path: ${{ runner.temp }}/bing-target-click.json
           if-no-files-found: warn
