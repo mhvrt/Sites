@@ -53,7 +53,7 @@ jobs:
           QUERY: "${{ matrix.q.text }}"
           QID: "${{ matrix.q.id }}"
         run: |
-          import os, requests, urllib.parse, json, base64, re
+          import os, requests, urllib.parse, json, base64
           from bs4 import BeautifulSoup
           q=os.environ['QUERY']; qid=os.environ['QID']
           ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0'
@@ -64,8 +64,7 @@ jobs:
               qs=urllib.parse.parse_qs(u.query)
               x=(qs.get('u') or [''])[0]
               if x.startswith('a1'):
-                raw=x[2:]
-                raw += '='*((4-len(raw)%4)%4)
+                raw=x[2:]; raw += '='*((4-len(raw)%4)%4)
                 return base64.b64decode(raw).decode('utf-8','ignore')
             except Exception: pass
             return href
@@ -73,8 +72,8 @@ jobs:
             url=f'https://www.bing.com/search?q={urllib.parse.quote(q)}&cc=US&setlang=en-US&first={first}&FORM=PERE'
             try:
               r=requests.get(url,timeout=20,headers={'User-Agent':ua,'Accept-Language':'en-US,en;q=0.9'})
-              text=r.text
-              blocked=any(x in (text+' '+r.url).lower() for x in ['captcha','verify you are human','unusual traffic','challenge'])
+              text=r.text; low=(text+' '+r.url).lower()
+              blocked=('verify you are human' in low or 'unusual traffic' in low or 'captcha' in low or '/challenge' in r.url.lower())
               soup=BeautifulSoup(text,'html.parser')
               results=[]
               for li in soup.select('li.b_algo'):
@@ -83,18 +82,13 @@ jobs:
                 href=a.get('href').strip(); dest=decode_bing(href)
                 results.append({'href':href,'dest':dest,'title':a.get_text(' ',strip=True)})
               valid=(r.status_code==200 and not blocked and len(results)>0)
-              page={'first':first,'valid':valid,'count':len(results)}
-              summary['pages'].append(page)
+              summary['pages'].append({'first':first,'valid':valid,'count':len(results)})
               if valid:
                 for off,item in enumerate(results):
-                  hay=(item['href']+' '+item['dest']).lower()
-                  if 'emcd.io' in hay:
-                    hit={'rank':first+off,'url':item['dest'],'title':item['title'],'first':first}
-                    summary['hits'].append(hit)
-                    print('HIT',json.dumps(hit,ensure_ascii=False))
+                  if 'emcd.io' in (item['href']+' '+item['dest']).lower():
+                    summary['hits'].append({'rank':first+off,'url':item['dest'],'title':item['title'],'first':first})
             except Exception as e:
               summary['pages'].append({'first':first,'valid':False,'error':str(e)})
-          print('SUMMARY',json.dumps(summary,ensure_ascii=False))
           open(f'result-{qid}.json','w').write(json.dumps(summary,ensure_ascii=False,indent=2))
       - name: Upload result
         if: always()
@@ -102,3 +96,29 @@ jobs:
         with:
           name: "bing-keyword-${{ matrix.q.id }}"
           path: "result-${{ matrix.q.id }}.json"
+
+  aggregate:
+    needs: scan
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: bing-keyword-*
+          path: results
+          merge-multiple: true
+      - name: Build summary
+        shell: python
+        run: |
+          import json, glob
+          rows=[]; hits=[]
+          for p in glob.glob('results/result-*.json'):
+            d=json.load(open(p)); rows.append(d); hits.extend([{'query':d['query'],**h} for h in d.get('hits',[])])
+          rows=sorted(rows,key=lambda x:int(x['id']))
+          out={'hits':hits,'rows':rows}
+          print(json.dumps(out,ensure_ascii=False,indent=2))
+          open('summary.json','w').write(json.dumps(out,ensure_ascii=False,indent=2))
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bing-keyword-summary
+          path: summary.json
