@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  bing-target-click:
+  bing-target-popup:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
@@ -18,16 +18,16 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox
-      - name: Verify Bing target click
+      - name: Verify Bing target click and popup
         env:
-          REPORT_PATH: ${{ runner.temp }}/bing-target-click.json
-        run: node scripts/debug-bing-target-click.mjs
+          REPORT_PATH: ${{ runner.temp }}/bing-target-click-popup.json
+        run: node scripts/debug-bing-target-click-popup.mjs
       - name: Show report
         if: always()
-        run: cat "${{ runner.temp }}/bing-target-click.json" || true
+        run: cat "${{ runner.temp }}/bing-target-click-popup.json" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bing-target-click-${{ github.run_id }}
-          path: ${{ runner.temp }}/bing-target-click.json
+          name: bing-target-popup-${{ github.run_id }}
+          path: ${{ runner.temp }}/bing-target-click-popup.json
           if-no-files-found: warn
