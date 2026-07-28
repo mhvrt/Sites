@@ -110,3 +110,53 @@ jobs:
           name: editorial-smoke-${{ github.run_id }}
           path: ${{ runner.temp }}/editorial-smoke/*
           if-no-files-found: warn
+
+  feeder:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - id: bitcash
+            url: https://bitcash.dev/
+          - id: bitdova
+            url: https://bitdova.com/
+          - id: docstr
+            url: https://docstr.app/
+          - id: nftworldnews
+            url: https://nftworldnews.tech/
+          - id: subsocket
+            url: https://subsocket.io/
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    env:
+      PERFORMA_ORIGIN: "https://performa.com"
+      FEEDER_URL_1: ${{ matrix.url }}
+      BLOCK_ANALYTICS: "true"
+      AI_DECISION_PROBABILITY: "0"
+      AI_MAX_DECISIONS: "0"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium firefox webkit
+      - name: Run feeder to Performa smoke test
+        shell: bash
+        run: |
+          set -o pipefail
+          xvfb-run -a node scripts/run-performa-qa.mjs 2>&1 | tee "$RUNNER_TEMP/feeder-${{ matrix.id }}.log"
+      - name: Check for referral goto fallback
+        if: always()
+        shell: bash
+        run: |
+          if grep -q 'using same-site goto fallback' "$RUNNER_TEMP/feeder-${{ matrix.id }}.log" 2>/dev/null; then
+            echo "Referral journey used goto fallback; not counted as a clean physical transition."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: feeder-${{ matrix.id }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/feeder-${{ matrix.id }}.log
+          if-no-files-found: warn
