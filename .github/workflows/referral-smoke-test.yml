@@ -9,6 +9,12 @@ permissions:
 
 jobs:
   bing-next:
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+        target_pages: [2, 3, 4, 5]
+    name: bing-next-${{ matrix.browser }}-p${{ matrix.target_pages }}
     runs-on: ubuntu-latest
     timeout-minutes: 12
     steps:
@@ -17,18 +23,13 @@ jobs:
         with:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium firefox
+      - run: npx playwright install --with-deps ${{ matrix.browser }}
       - name: Test physical Bing pagination
-        continue-on-error: true
         env:
+          BROWSER: ${{ matrix.browser }}
+          TARGET_PAGES: ${{ matrix.target_pages }}
           REPORT_PATH: ${{ runner.temp }}/bing-next-click.json
         run: node scripts/debug-bing-next-click.mjs
       - name: Show report
         if: always()
         run: cat "${{ runner.temp }}/bing-next-click.json" || true
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: bing-next-click-${{ github.run_id }}
-          path: ${{ runner.temp }}/bing-next-click.json
-          if-no-files-found: warn
