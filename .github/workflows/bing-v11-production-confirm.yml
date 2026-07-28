@@ -1,0 +1,35 @@
+name: Bing V11 production confirm
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+
+jobs:
+  confirm:
+    runs-on: ubuntu-latest
+    timeout-minutes: 18
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install --ignore-scripts --no-audit --no-fund
+      - run: npx playwright install --with-deps chromium firefox
+      - name: Run exact production V11
+        env:
+          REPORT_PATH: ${{ runner.temp }}/bing-v11-confirm.json
+          BING_MAX_ATTEMPTS: "3"
+          BING_MAX_SERP_PAGES: "5"
+        run: node scripts/run-bing-antminer-referral-v11.mjs
+      - name: Show report
+        if: always()
+        run: cat "${{ runner.temp }}/bing-v11-confirm.json" || true
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bing-v11-confirm-${{ github.run_id }}
+          path: ${{ runner.temp }}/bing-v11-confirm.json
+          if-no-files-found: warn
