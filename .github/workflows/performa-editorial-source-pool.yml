@@ -2,7 +2,7 @@ name: Performa editorial source pool
 
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "7,17,27,37,47,57 * * * *"
   workflow_dispatch:
     inputs:
       source_url:
@@ -19,9 +19,10 @@ jobs:
       group: performa-editorial-source-pool
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 50
+    timeout-minutes: 20
     env:
       PERFORMA_ORIGIN: "https://performa.com"
+      REFERRAL_PARALLELISM: "5"
 
     steps:
       - name: Checkout
@@ -48,40 +49,56 @@ jobs:
         env:
           MANUAL_SOURCE_URL: ${{ inputs.source_url }}
         run: |
-          set +e
+          set -u
 
-          successes=0
-          failures=0
+          results_dir="$(mktemp -d)"
+          sources_file="$(mktemp)"
 
-          if [ -n "$MANUAL_SOURCE_URL" ]; then
-            printf '%s\n' "$MANUAL_SOURCE_URL" > /tmp/performa-editorial-sources.txt
+          if [ -n "${MANUAL_SOURCE_URL:-}" ]; then
+            printf '%s\n' "$MANUAL_SOURCE_URL" > "$sources_file"
           else
-            shuf config/performa-editorial-sources.txt > /tmp/performa-editorial-sources.txt
+            shuf config/performa-editorial-sources.txt > "$sources_file"
           fi
 
-          while IFS= read -r source_url || [ -n "$source_url" ]; do
-            [ -z "$source_url" ] && continue
+          run_source() {
+            source_url="$1"
+            result_file="$2"
+
+            # Spread starts within the ten-minute window instead of hitting every publisher at once.
+            delay=$((RANDOM % 50))
+            sleep "$delay"
 
             echo "::group::Referral source: $source_url"
-            REFERRAL_SOURCE_URL="$source_url" xvfb-run -a node scripts/run-performa-editorial-referral.mjs
-            status=$?
-            echo "::endgroup::"
-
-            if [ "$status" -eq 0 ]; then
-              successes=$((successes + 1))
+            if REFERRAL_SOURCE_URL="$source_url" xvfb-run -a node scripts/run-performa-editorial-referral.mjs; then
+              printf 'success\t%s\n' "$source_url" > "$result_file"
             else
-              failures=$((failures + 1))
-              echo "Referral journey failed for: $source_url"
+              printf 'failure\t%s\n' "$source_url" > "$result_file"
             fi
+            echo "::endgroup::"
+          }
+          export -f run_source
 
-            sleep $((5 + RANDOM % 16))
-          done < /tmp/performa-editorial-sources.txt
+          index=0
+          while IFS= read -r source_url || [ -n "$source_url" ]; do
+            [ -z "$source_url" ] && continue
+            index=$((index + 1))
 
-          echo "Referral pool complete: successes=$successes failures=$failures"
+            bash -c 'run_source "$1" "$2"' _ "$source_url" "$results_dir/$index.tsv" &
+
+            while [ "$(jobs -pr | wc -l | tr -d ' ')" -ge "$REFERRAL_PARALLELISM" ]; do
+              wait -n || true
+            done
+          done < "$sources_file"
+
+          wait || true
+
+          successes=$(grep -h '^success' "$results_dir"/*.tsv 2>/dev/null | wc -l | tr -d ' ')
+          failures=$(grep -h '^failure' "$results_dir"/*.tsv 2>/dev/null | wc -l | tr -d ' ')
+          total=$((successes + failures))
+
+          echo "Referral pool complete: total=$total successes=$successes failures=$failures"
 
           if [ "$successes" -eq 0 ]; then
             echo "No referral journey succeeded in this run."
             exit 1
           fi
-
-          exit 0
