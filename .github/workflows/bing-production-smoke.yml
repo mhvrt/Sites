@@ -18,13 +18,13 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox
-      - name: Run robust Bing referral
+      - name: Run robust Bing referral v2
         env:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
           BING_MAX_ATTEMPTS: "3"
           BING_MAX_SERP_PAGES: "5"
-          SMOKE_REVISION: "6"
-        run: node scripts/run-bing-antminer-referral.mjs
+          SMOKE_REVISION: "7"
+        run: node scripts/run-bing-antminer-referral-v2.mjs
       - name: Show report
         if: always()
         run: cat "${{ runner.temp }}/bing-antminer-qa.json" || true
