@@ -1,4 +1,4 @@
-name: Bing v6 smoke
+name: Bing v7 smoke
 
 on:
   pull_request:
@@ -8,7 +8,7 @@ permissions:
   contents: read
 
 jobs:
-  bing-v6:
+  bing-v7:
     runs-on: ubuntu-latest
     timeout-minutes: 18
     steps:
@@ -17,19 +17,19 @@ jobs:
         with:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps chromium firefox
-      - name: Run Bing v6 end-to-end
+      - run: npx playwright install --with-deps firefox
+      - name: Run Bing v7 end-to-end
         env:
-          REPORT_PATH: ${{ runner.temp }}/bing-v6.json
+          REPORT_PATH: ${{ runner.temp }}/bing-v7.json
           BING_MAX_ATTEMPTS: "5"
           REQUIRED_EMCD_PAGES: "4"
-        run: node scripts/run-bing-antminer-referral-v6.mjs
+        run: node scripts/run-bing-antminer-referral-v7.mjs
       - name: Show report
         if: always()
-        run: cat "${{ runner.temp }}/bing-v6.json" || true
+        run: cat "${{ runner.temp }}/bing-v7.json" || true
       - uses: actions/upload-artifact@v4
         if: always()
         with:
-          name: bing-v6-${{ github.run_id }}
-          path: ${{ runner.temp }}/bing-v6.json
+          name: bing-v7-${{ github.run_id }}
+          path: ${{ runner.temp }}/bing-v7.json
           if-no-files-found: warn
