@@ -14,14 +14,14 @@ jobs:
       group: bing-antminer-qa-${{ github.event.schedule || github.run_id }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 18
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps firefox
+      - run: npx playwright install --with-deps chromium firefox
       - name: Random second jitter
         shell: bash
         run: |
@@ -31,6 +31,7 @@ jobs:
       - name: Run synthetic Bing QA click
         env:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
+          BING_MAX_ATTEMPTS: "3"
         run: node scripts/run-bing-antminer-qa.mjs
       - name: Publish summary
         if: always()
@@ -47,9 +48,18 @@ jobs:
           console.log(`- Matched title: \`${r.matchedTitle || 'not found'}\``);
           console.log(`- Bing region: \`${r.bingRegion || 'unknown'}\``);
           console.log(`- Bing market: \`${r.bingMarket || 'unknown'}\``);
+          console.log(`- Successful attempt: \`${r.successfulAttempt ?? 'none'}\``);
+          console.log(`- SERP page: \`${r.serpPage ?? 'not found'}\``);
           console.log(`- Rank: \`${r.rank ?? 'not found'}\``);
           console.log(`- Bing dwell before click: \`${r.bingPreClickMs ? `${(r.bingPreClickMs / 1000).toFixed(1)}s` : 'n/a'}\``);
           console.log(`- Clicked: \`${r.clicked ? 'yes' : 'no'}\``);
+          if (Array.isArray(r.attempts) && r.attempts.length) {
+            console.log('- Attempts:');
+            for (const a of r.attempts) {
+              const pages = Array.isArray(a.pages) ? a.pages.map((p) => `p${p.page}:${p.challenge ? 'challenge' : `${p.resultCount} results`}`).join(', ') : '';
+              console.log(`  - #${a.number} ${a.browser}: ${a.status}${pages ? ` (${pages})` : ''}${a.error ? ` — ${a.error}` : ''}`);
+            }
+          }
           console.log(`- EMCD pages visited: \`${r.emcdPagesVisited ?? 0}\``);
           console.log(`- Final URL: \`${r.finalUrl || 'n/a'}\``);
           console.log(`- Referrer: \`${r.referrer || 'n/a'}\``);
