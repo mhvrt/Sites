@@ -1,0 +1,41 @@
+name: Temporary Bing keyword scan
+
+on:
+  pull_request:
+    branches: [main]
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 12
+    steps:
+      - uses: actions/checkout@v4
+      - name: Scan Bing US RSS top10 for emcd.io
+        shell: python
+        run: |
+          import requests, urllib.parse, xml.etree.ElementTree as ET, json
+          queries = [
+            'when was bitcoin invented','blockchair','when did bitcoin come out','bitcoin release date','when was bitcoin launched','when was bitcoin created','bitcoin launch date','dgb','how to mine bitcoin on pc','kryptex','how to mine dogecoin','ethereum vs bitcoin','bitcoin creation date','when did bitcoin launch','how long do gpus last','how to make money with bitcoin','antminer s9','blochair','asic miners','reate a mining pool','how long has bitcoin been around','what are tokens in ai','safest crypto wallet','how long does a gpu last','what is solana','best crypto wallet for beginners','how long does it take to mine 1 bitcoin','dogecoin mining','stable busd','stable busd crypto'
+          ]
+          hits=[]
+          for q in queries:
+            url='https://www.bing.com/search?q='+urllib.parse.quote(q)+'&format=rss&cc=US&setlang=en-US'
+            try:
+              r=requests.get(url,timeout=20,headers={'User-Agent':'Mozilla/5.0'})
+              root=ET.fromstring(r.text)
+              items=root.findall('.//item')
+              found=[]
+              for i,item in enumerate(items,1):
+                link=(item.findtext('link') or '').strip()
+                title=(item.findtext('title') or '').strip()
+                if 'emcd.io' in link.lower(): found.append({'rank':i,'url':link,'title':title})
+              print(json.dumps({'query':q,'count':len(items),'hits':found},ensure_ascii=False))
+              if found: hits.append({'query':q,'hits':found})
+            except Exception as e:
+              print(json.dumps({'query':q,'error':str(e)},ensure_ascii=False))
+          with open('bing-keyword-hits.json','w') as f: json.dump(hits,f,ensure_ascii=False,indent=2)
+      - name: Upload results
+        uses: actions/upload-artifact@v4
+        with:
+          name: bing-keyword-hits
+          path: bing-keyword-hits.json
