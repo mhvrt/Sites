@@ -6,36 +6,99 @@ on:
 
 jobs:
   scan:
+    name: "${{ matrix.q.id }} ${{ matrix.q.text }}"
     runs-on: ubuntu-latest
-    timeout-minutes: 12
+    timeout-minutes: 8
+    strategy:
+      fail-fast: false
+      max-parallel: 12
+      matrix:
+        q:
+          - {id: 1, text: "when was bitcoin invented"}
+          - {id: 2, text: "blockchair"}
+          - {id: 3, text: "when did bitcoin come out"}
+          - {id: 4, text: "bitcoin release date"}
+          - {id: 5, text: "when was bitcoin launched"}
+          - {id: 6, text: "when was bitcoin created"}
+          - {id: 7, text: "bitcoin launch date"}
+          - {id: 8, text: "dgb"}
+          - {id: 9, text: "how to mine bitcoin on pc"}
+          - {id: 10, text: "kryptex"}
+          - {id: 11, text: "how to mine dogecoin"}
+          - {id: 12, text: "ethereum vs bitcoin"}
+          - {id: 13, text: "bitcoin creation date"}
+          - {id: 14, text: "when did bitcoin launch"}
+          - {id: 15, text: "how long do gpus last"}
+          - {id: 16, text: "how to make money with bitcoin"}
+          - {id: 17, text: "antminer s9"}
+          - {id: 18, text: "blochair"}
+          - {id: 19, text: "asic miners"}
+          - {id: 20, text: "reate a mining pool"}
+          - {id: 21, text: "how long has bitcoin been around"}
+          - {id: 22, text: "what are tokens in ai"}
+          - {id: 23, text: "safest crypto wallet"}
+          - {id: 24, text: "how long does a gpu last"}
+          - {id: 25, text: "what is solana"}
+          - {id: 26, text: "best crypto wallet for beginners"}
+          - {id: 27, text: "how long does it take to mine 1 bitcoin"}
+          - {id: 28, text: "dogecoin mining"}
+          - {id: 29, text: "stable busd"}
+          - {id: 30, text: "stable busd crypto"}
     steps:
       - uses: actions/checkout@v4
-      - name: Scan Bing US RSS top10 for emcd.io
+      - run: python -m pip install -q requests beautifulsoup4
+      - name: Check Bing US ranks 11-60
         shell: python
+        env:
+          QUERY: "${{ matrix.q.text }}"
+          QID: "${{ matrix.q.id }}"
         run: |
-          import requests, urllib.parse, xml.etree.ElementTree as ET, json
-          queries = [
-            'when was bitcoin invented','blockchair','when did bitcoin come out','bitcoin release date','when was bitcoin launched','when was bitcoin created','bitcoin launch date','dgb','how to mine bitcoin on pc','kryptex','how to mine dogecoin','ethereum vs bitcoin','bitcoin creation date','when did bitcoin launch','how long do gpus last','how to make money with bitcoin','antminer s9','blochair','asic miners','reate a mining pool','how long has bitcoin been around','what are tokens in ai','safest crypto wallet','how long does a gpu last','what is solana','best crypto wallet for beginners','how long does it take to mine 1 bitcoin','dogecoin mining','stable busd','stable busd crypto'
-          ]
-          hits=[]
-          for q in queries:
-            url='https://www.bing.com/search?q='+urllib.parse.quote(q)+'&format=rss&cc=US&setlang=en-US'
+          import os, requests, urllib.parse, json, base64, re
+          from bs4 import BeautifulSoup
+          q=os.environ['QUERY']; qid=os.environ['QID']
+          ua='Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:128.0) Gecko/20100101 Firefox/128.0'
+          summary={'id':qid,'query':q,'pages':[],'hits':[]}
+          def decode_bing(href):
             try:
-              r=requests.get(url,timeout=20,headers={'User-Agent':'Mozilla/5.0'})
-              root=ET.fromstring(r.text)
-              items=root.findall('.//item')
-              found=[]
-              for i,item in enumerate(items,1):
-                link=(item.findtext('link') or '').strip()
-                title=(item.findtext('title') or '').strip()
-                if 'emcd.io' in link.lower(): found.append({'rank':i,'url':link,'title':title})
-              print(json.dumps({'query':q,'count':len(items),'hits':found},ensure_ascii=False))
-              if found: hits.append({'query':q,'hits':found})
+              u=urllib.parse.urlparse(href)
+              qs=urllib.parse.parse_qs(u.query)
+              x=(qs.get('u') or [''])[0]
+              if x.startswith('a1'):
+                raw=x[2:]
+                raw += '='*((4-len(raw)%4)%4)
+                return base64.b64decode(raw).decode('utf-8','ignore')
+            except Exception: pass
+            return href
+          for first in [11,21,31,41,51]:
+            url=f'https://www.bing.com/search?q={urllib.parse.quote(q)}&cc=US&setlang=en-US&first={first}&FORM=PERE'
+            try:
+              r=requests.get(url,timeout=20,headers={'User-Agent':ua,'Accept-Language':'en-US,en;q=0.9'})
+              text=r.text
+              blocked=any(x in (text+' '+r.url).lower() for x in ['captcha','verify you are human','unusual traffic','challenge'])
+              soup=BeautifulSoup(text,'html.parser')
+              results=[]
+              for li in soup.select('li.b_algo'):
+                a=li.select_one('h2 a')
+                if not a or not a.get('href'): continue
+                href=a.get('href').strip(); dest=decode_bing(href)
+                results.append({'href':href,'dest':dest,'title':a.get_text(' ',strip=True)})
+              valid=(r.status_code==200 and not blocked and len(results)>0)
+              page={'first':first,'valid':valid,'count':len(results)}
+              summary['pages'].append(page)
+              if valid:
+                for off,item in enumerate(results):
+                  hay=(item['href']+' '+item['dest']).lower()
+                  if 'emcd.io' in hay:
+                    hit={'rank':first+off,'url':item['dest'],'title':item['title'],'first':first}
+                    summary['hits'].append(hit)
+                    print('HIT',json.dumps(hit,ensure_ascii=False))
             except Exception as e:
-              print(json.dumps({'query':q,'error':str(e)},ensure_ascii=False))
-          with open('bing-keyword-hits.json','w') as f: json.dump(hits,f,ensure_ascii=False,indent=2)
-      - name: Upload results
+              summary['pages'].append({'first':first,'valid':False,'error':str(e)})
+          print('SUMMARY',json.dumps(summary,ensure_ascii=False))
+          open(f'result-{qid}.json','w').write(json.dumps(summary,ensure_ascii=False,indent=2))
+      - name: Upload result
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: bing-keyword-hits
-          path: bing-keyword-hits.json
+          name: "bing-keyword-${{ matrix.q.id }}"
+          path: "result-${{ matrix.q.id }}.json"
