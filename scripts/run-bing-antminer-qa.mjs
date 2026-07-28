@@ -26,16 +26,118 @@ function decodeBingUrl(href) {
   }
 }
 
+function normalizeHost(value) {
+  return String(value || '').toLowerCase().replace(/^www\./, '');
+}
+
+function isEmcdUrl(value) {
+  try {
+    const u = new URL(value);
+    return normalizeHost(u.hostname) === TARGET_HOST && /^https?:$/.test(u.protocol);
+  } catch {
+    return false;
+  }
+}
+
 function isTargetUrl(value) {
   try {
     const u = new URL(value);
     return (
-      u.hostname.replace(/^www\./, '') === TARGET_HOST &&
+      normalizeHost(u.hostname) === TARGET_HOST &&
       u.pathname.replace(/\/+$/, '/') === TARGET_PATH
     );
   } catch {
     return false;
   }
+}
+
+async function naturalRead(page) {
+  await page.waitForTimeout(randomBetween(2200, 5200));
+
+  const viewportHeight = await page.evaluate(() => window.innerHeight || 800).catch(() => 800);
+  const scrollHeight = await page.evaluate(() => document.documentElement.scrollHeight || document.body.scrollHeight || 0).catch(() => 0);
+  const maxScroll = Math.max(0, scrollHeight - viewportHeight);
+
+  if (maxScroll > 250) {
+    const first = randomBetween(Math.min(200, maxScroll), Math.max(Math.min(900, maxScroll), Math.min(200, maxScroll)));
+    await page.evaluate((y) => window.scrollTo({ top: y, behavior: 'smooth' }), first).catch(() => undefined);
+    await page.waitForTimeout(randomBetween(900, 2200));
+
+    const secondMin = Math.min(maxScroll, first + 200);
+    const secondMax = Math.min(maxScroll, first + randomBetween(450, 1300));
+    if (secondMax > secondMin) {
+      const second = randomBetween(secondMin, secondMax);
+      await page.evaluate((y) => window.scrollTo({ top: y, behavior: 'smooth' }), second).catch(() => undefined);
+      await page.waitForTimeout(randomBetween(1000, 2600));
+    }
+  }
+}
+
+async function browseEmcd(page, report) {
+  const additionalPages = randomBetween(3, 5);
+  const visited = new Set([page.url()]);
+  report.emcdRoute = [page.url()];
+
+  for (let step = 0; step < additionalPages; step += 1) {
+    await naturalRead(page);
+
+    const anchors = page.locator('a[href]');
+    const count = Math.min(await anchors.count(), 500);
+    const candidates = [];
+
+    for (let i = 0; i < count; i += 1) {
+      const link = anchors.nth(i);
+      if (!(await link.isVisible().catch(() => false))) continue;
+
+      const href = (await link.getAttribute('href')) || '';
+      if (!href || href.startsWith('#') || href.startsWith('mailto:') || href.startsWith('tel:') || href.startsWith('javascript:')) continue;
+
+      let absolute;
+      try {
+        absolute = new URL(href, page.url()).toString();
+      } catch {
+        continue;
+      }
+
+      if (!isEmcdUrl(absolute)) continue;
+      if (visited.has(absolute)) continue;
+      if (absolute === page.url()) continue;
+
+      const text = cleanText(await link.innerText().catch(() => ''));
+      if (!text) continue;
+
+      candidates.push({ index: i, url: absolute, text });
+    }
+
+    if (!candidates.length) break;
+
+    const chosen = candidates[randomBetween(0, candidates.length - 1)];
+    const link = anchors.nth(chosen.index);
+    const before = page.url();
+
+    await link.scrollIntoViewIfNeeded().catch(() => undefined);
+    await page.waitForTimeout(randomBetween(500, 1500));
+    await link.evaluate((el) => el.removeAttribute('target')).catch(() => undefined);
+
+    const nav = page.waitForURL(
+      (u) => isEmcdUrl(u.toString()) && u.toString() !== before,
+      { timeout: 30000, waitUntil: 'domcontentloaded' },
+    ).catch(() => undefined);
+
+    await link.click({ timeout: 15000 }).catch(() => undefined);
+    await nav;
+    await page.waitForTimeout(randomBetween(1200, 3200));
+
+    const current = page.url();
+    if (!isEmcdUrl(current) || current === before) continue;
+
+    visited.add(current);
+    report.emcdRoute.push(current);
+  }
+
+  await naturalRead(page);
+  report.emcdPagesVisited = report.emcdRoute.length;
+  report.finalUrl = page.url();
 }
 
 let browser;
@@ -52,6 +154,8 @@ const report = {
   rank: null,
   finalUrl: null,
   referrer: null,
+  emcdPagesVisited: 0,
+  emcdRoute: [],
   error: null,
 };
 
@@ -128,8 +232,9 @@ try {
   await page.waitForTimeout(randomBetween(1800, 4200));
 
   report.clicked = true;
-  report.finalUrl = page.url();
   report.referrer = await page.evaluate(() => document.referrer);
+
+  await browseEmcd(page, report);
 } catch (error) {
   report.error = error instanceof Error ? error.message : String(error);
 } finally {
