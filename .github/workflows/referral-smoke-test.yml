@@ -10,14 +10,14 @@ permissions:
 jobs:
   bing-next:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 12
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
-      - run: npx playwright install --with-deps firefox
+      - run: npx playwright install --with-deps chromium firefox
       - name: Test physical Bing pagination
         env:
           REPORT_PATH: ${{ runner.temp }}/bing-next-click.json
