@@ -68,4 +68,33 @@ jobs:
           sleep "$delay"
 
       - name: Run editorial referral journey
-        run: xvfb-run -a node scripts/run-performa-editorial-referral.mjs
+        shell: bash
+        run: |
+          set +e
+          max_attempts=3
+          attempt=1
+
+          while [ "$attempt" -le "$max_attempts" ]; do
+            echo "Referral attempt $attempt/$max_attempts for $REFERRAL_SOURCE_URL"
+            xvfb-run -a node scripts/run-performa-editorial-referral.mjs
+            code=$?
+            if [ "$code" -eq 0 ]; then
+              exit 0
+            fi
+
+            if [ "$attempt" -lt "$max_attempts" ]; then
+              retry_delay=$((8 + RANDOM % 13))
+              echo "::warning::Referral attempt $attempt failed; retrying in ${retry_delay}s"
+              sleep "$retry_delay"
+            fi
+            attempt=$((attempt + 1))
+          done
+
+          echo "::warning::Editorial referral journey failed after $max_attempts attempts: $REFERRAL_SOURCE_URL"
+
+          # Scheduled synthetic traffic depends on third-party publisher availability and should not
+          # turn a transient external failure into a GitHub Actions failure email. Manual QA stays strict.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            exit 1
+          fi
+          exit 0
