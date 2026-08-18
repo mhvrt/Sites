@@ -23,6 +23,7 @@ jobs:
     env:
       PERFORMA_ORIGIN: "https://performa.com"
       REFERRAL_PARALLELISM: "5"
+      REFERRAL_MAX_ATTEMPTS: "2"
 
     steps:
       - name: Checkout
@@ -65,18 +66,34 @@ jobs:
           run_source() {
             source_url="$1"
             result_file="$2"
+            max_attempts="${REFERRAL_MAX_ATTEMPTS:-2}"
 
             # Spread starts within the ten-minute window instead of hitting every publisher at once.
             delay=$((RANDOM % 50))
             sleep "$delay"
 
             echo "::group::Referral source: $source_url"
-            if REFERRAL_SOURCE_URL="$source_url" xvfb-run -a node scripts/run-performa-editorial-referral.mjs; then
-              printf 'success\t%s\n' "$source_url" > "$result_file"
-            else
-              printf 'failure\t%s\n' "$source_url" > "$result_file"
-            fi
+            attempt=1
+            while [ "$attempt" -le "$max_attempts" ]; do
+              echo "Attempt $attempt/$max_attempts"
+              if REFERRAL_SOURCE_URL="$source_url" xvfb-run -a node scripts/run-performa-editorial-referral.mjs; then
+                printf 'success\t%s\n' "$source_url" > "$result_file"
+                echo "::endgroup::"
+                return 0
+              fi
+
+              if [ "$attempt" -lt "$max_attempts" ]; then
+                retry_delay=$((5 + RANDOM % 11))
+                echo "::warning::Referral attempt $attempt failed for $source_url; retrying in ${retry_delay}s"
+                sleep "$retry_delay"
+              fi
+              attempt=$((attempt + 1))
+            done
+
+            printf 'failure\t%s\n' "$source_url" > "$result_file"
+            echo "::warning::Referral source failed after $max_attempts attempts: $source_url"
             echo "::endgroup::"
+            return 0
           }
           export -f run_source
 
@@ -119,8 +136,7 @@ jobs:
           fi
 
           if [ "$failures" -gt 0 ]; then
-            echo "One or more referral journeys failed."
-            exit 1
+            echo "::warning::$failures of $total referral journeys failed after retries; keeping the scheduled pool run successful because at least one journey succeeded."
           fi
 
       - name: Upload referral results
