@@ -22,6 +22,8 @@ jobs:
           node-version: 22
       - run: npm install --ignore-scripts --no-audit --no-fund
       - run: npx playwright install --with-deps chromium firefox
+      - name: Validate Bing referral runner
+        run: node --check scripts/run-bing-antminer-referral-v11.mjs
       - name: Random second jitter
         shell: bash
         run: |
@@ -29,11 +31,27 @@ jobs:
           echo "Random Bing QA delay: ${delay}s"
           sleep "$delay"
       - name: Run synthetic Bing referral
+        shell: bash
         env:
           REPORT_PATH: ${{ runner.temp }}/bing-antminer-qa.json
           BING_MAX_ATTEMPTS: "3"
           BING_MAX_SERP_PAGES: "5"
-        run: node scripts/run-bing-antminer-referral-v11.mjs
+        run: |
+          set +e
+          node scripts/run-bing-antminer-referral-v11.mjs
+          code=$?
+          if [ "$code" -eq 0 ]; then
+            exit 0
+          fi
+
+          echo "::warning::Bing synthetic referral did not complete successfully after its internal attempts."
+
+          # Bing challenges and SERP volatility are external conditions. Keep scheduled traffic runs
+          # as warnings, while preserving a hard failure when this workflow is launched manually for QA.
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            exit "$code"
+          fi
+          exit 0
       - name: Publish summary
         if: always()
         env:
